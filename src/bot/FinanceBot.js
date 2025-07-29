@@ -192,8 +192,8 @@ class FinanceBot {
             response += `💰 *Total Pemasukan:* Rp ${formattedIncome}\n`;
             response += `💸 *Total Pengeluaran:* Rp ${formattedExpense}\n`;
             response += `💳 *Saldo:* Rp ${formattedBalance}\n\n`;
-            response += `📅 *Periode:* Semua waktu\n`;
-            response += `📝 *Total Transaksi:* ${summary.transactionCount || 0}\n\n`;
+            response += `📅 *Periode:* Semua waktu\n`;            
+            response += `📝 *Total Transaksi:* ${summary.transactionCount} (${summary.incomeCount} pemasukan, ${summary.expenseCount} pengeluaran)\n\n`;
             response += `💡 *Tips:* Ketik "detail" untuk laporan lengkap`;
             
             return response;
@@ -217,7 +217,7 @@ class FinanceBot {
             response += `💰 Total Pemasukan: Rp ${this.formatCurrency(report.summary.totalIncome)}\n`;
             response += `💸 Total Pengeluaran: Rp ${this.formatCurrency(report.summary.totalExpense)}\n`;
             response += `💳 Saldo: Rp ${this.formatCurrency(report.summary.totalIncome - report.summary.totalExpense)}\n`;
-            response += `📝 Total Transaksi: ${report.summary.transactionCount}\n\n`;
+            response += `📝 Total Transaksi: ${report.summary.transactionCount} (${report.summary.incomeCount} pemasukan, ${report.summary.expenseCount} pengeluaran)\n\n`;
             
             // Income breakdown
             if (Object.keys(report.income.byCategory).length > 0) {
@@ -240,8 +240,26 @@ class FinanceBot {
             }
             
             response += `📅 *Periode:* ${report.period.startDate} s/d ${report.period.endDate}\n`;
+            response += `\n`;
+            // Tambahkan daftar transaksi pemasukan
+            if (report.income.transactions.length > 0) {
+                response += `🟢 *DAFTAR PEMASUKAN*\n`;
+                report.income.transactions.forEach(t => {
+                    const tgl = new Date(t.timestamp).toLocaleDateString('id-ID');
+                    response += `• [${tgl}] ${t.description} - Rp ${this.formatCurrency(t.amount)}\n`;
+                });
+                response += `\n`;
+            }
+            // Tambahkan daftar transaksi pengeluaran
+            if (report.expense.transactions.length > 0) {
+                response += `🔴 *DAFTAR PENGELUARAN*\n`;
+                report.expense.transactions.forEach(t => {
+                    const tgl = new Date(t.timestamp).toLocaleDateString('id-ID');
+                    response += `• [${tgl}] ${t.description} - Rp ${this.formatCurrency(t.amount)}\n`;
+                });
+                response += `\n`;
+            }
             response += `💡 *Tips:* Ketik "bulan ini" untuk laporan bulanan`;
-            
             return response;
         } catch (error) {
             console.error('Error generating detailed report:', error);
@@ -702,7 +720,10 @@ class FinanceBot {
     async getSummary() {
         try {
             const transactions = await this.database.getTransactions();
-            
+            console.log("🔍 Transactions:", transactions);
+            const incomeTransactions = transactions.filter(t => t.type === 'income');
+            const expenseTransactions = transactions.filter(t => t.type === 'expense');
+
             const summary = transactions.reduce((acc, transaction) => {
                 if (transaction.type === 'income') {
                     acc.totalIncome += transaction.amount;
@@ -713,6 +734,10 @@ class FinanceBot {
             }, { totalIncome: 0, totalExpense: 0 });
 
             summary.balance = summary.totalIncome - summary.totalExpense;
+            summary.incomeCount = incomeTransactions.length;
+            summary.expenseCount = expenseTransactions.length;  
+            summary.transactionCount = incomeTransactions.length + expenseTransactions.length;
+            console.log("🔍 Summary:", summary);
             return summary;
         } catch (error) {
             console.error('Error getting summary:', error);
@@ -802,7 +827,7 @@ class FinanceBot {
                 summary: {
                     totalIncome: incomeTransactions.reduce((sum, t) => sum + t.amount, 0),
                     totalExpense: expenseTransactions.reduce((sum, t) => sum + t.amount, 0),
-                    transactionCount: filteredTransactions.length,
+                    transactionCount: incomeTransactions.length + expenseTransactions.length,
                     incomeCount: incomeTransactions.length,
                     expenseCount: expenseTransactions.length
                 },
