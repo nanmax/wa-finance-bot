@@ -7,6 +7,7 @@ const cors = require('cors');
 const Database = require('./database/Database');
 const FinanceBot = require('./bot/FinanceBot');
 const AIService = require('./services/AIService');
+const BackupService = require('./services/BackupService');
 const fs = require('fs');
 const path = require('path');
 
@@ -26,6 +27,21 @@ class WhatsAppFinanceRenderServer {
         this.currentQRCode = null;
         this.qrGeneratedAt = null;
         this.loadGroupConfig();
+        
+        // Check environment variables
+        this.checkEnvironment();
+    }
+
+    checkEnvironment() {
+        console.log('🔧 Environment Check:');
+        console.log(`  - OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? 'Set' : 'Not set'}`);
+        console.log(`  - AUTH_PATH: ${process.env.AUTH_PATH || './.wwebjs_auth'}`);
+        console.log(`  - CLIENT_ID: ${process.env.CLIENT_ID || 'wa-finance-render'}`);
+        console.log(`  - PORT: ${process.env.PORT || 3000}`);
+        
+        if (!process.env.OPENAI_API_KEY) {
+            console.log('⚠️ OpenAI API key tidak ditemukan, AI features akan menggunakan pattern matching');
+        }
     }
 
     loadGroupConfig() {
@@ -140,8 +156,43 @@ class WhatsAppFinanceRenderServer {
     }
 
     setupFinanceBot() {
-        this.financeBot = new FinanceBot(this.client, this.db, this.aiService);
+        this.backupService = new BackupService(this.db);
+        this.financeBot = new FinanceBot(this.db, this.aiService, this.backupService, null);
     }
+
+    async safeSendMessage(chatId, text) {
+        if (!chatId || !text) {
+            console.log('⚠️ Invalid chatId or text for sending message');
+            return false;
+        }
+
+        try {
+            // Method 1: Direct send
+            await this.client.sendMessage(chatId, text);
+            console.log('✅ Message sent successfully to:', chatId);
+            return true;
+        } catch (error) {
+            console.log('Method 1 failed:', error.message);
+        }
+
+        try {
+            // Method 2: Get chat and send
+            const chats = await this.client.getChats();
+            const chat = chats.find(c => c.id._serialized === chatId);
+            if (chat) {
+                await chat.sendMessage(text);
+                console.log('✅ Message sent via chat object to:', chatId);
+                return true;
+            }
+        } catch (error) {
+            console.log('Method 2 failed:', error.message);
+        }
+
+        console.error('❌ All send methods failed for chat:', chatId);
+        return false;
+    }
+
+
 
     setupWhatsAppEventHandlers() {
         this.client.on('qr', async (qr) => {
@@ -185,13 +236,37 @@ class WhatsAppFinanceRenderServer {
             this.attemptReconnect();
         });
 
-        this.client.on('message', async (message) => {
+                this.client.on('message', async (message) => {
             try {
                 // Log group info untuk debugging
                 if (message.from.endsWith('@g.us')) {
                     console.log(`📱 Group Message - ID: ${message.from}, Name: ${message._data.notifyName || 'Unknown'}, Sender: ${message.author || 'Unknown'}`);
                 }
-                await this.financeBot.handleMessage(message);
+                
+                // Get contact name
+                let contactName = message.author || 'Unknown';
+                try {
+                    if (message._data && message._data.notifyName) {
+                        contactName = message._data.notifyName;
+                    } else if (message.author) {
+                        const contact = await message.getContact();
+                        if (contact && contact.pushname) {
+                            contactName = contact.pushname;
+                        } else if (contact && contact.name) {
+                            contactName = contact.name;
+                        } else {
+                            contactName = message.author.split('@')[0];
+                        }
+                    }
+                } catch (error) {
+                    console.log('⚠️ Tidak bisa mendapatkan nama kontak, menggunakan author');
+                    contactName = message.author ? message.author.split('@')[0] : 'Unknown';
+                }
+                
+                const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                if (result) {
+                    await this.safeSendMessage(message.from, result);
+                }
             } catch (error) {
                 console.error('Message error:', error.message);
             }
@@ -200,7 +275,30 @@ class WhatsAppFinanceRenderServer {
         this.client.on('message_create', async (message) => {
             try {
                 if (message.fromMe) {
-                    await this.financeBot.handleMessage(message);
+                    // Get contact name for self messages
+                    let contactName = message.author || 'Unknown';
+                    try {
+                        if (message._data && message._data.notifyName) {
+                            contactName = message._data.notifyName;
+                        } else if (message.author) {
+                            const contact = await message.getContact();
+                            if (contact && contact.pushname) {
+                                contactName = contact.pushname;
+                            } else if (contact && contact.name) {
+                                contactName = contact.name;
+                            } else {
+                                contactName = message.author.split('@')[0];
+                            }
+                        }
+                    } catch (error) {
+                        console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan author');
+                        contactName = message.author ? message.author.split('@')[0] : 'Unknown';
+                    }
+                    
+                    const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                    if (result) {
+                        await this.safeSendMessage(message.from, result);
+                    }
                 }
             } catch (error) {
                 console.error('Self message error:', error.message);

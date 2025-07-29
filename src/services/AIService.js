@@ -41,6 +41,12 @@ class AIService {
 
     async analyzeWithAI(message) {
         try {
+            // Check if OpenAI is properly initialized
+            if (!this.openai) {
+                console.log('⚠️ OpenAI tidak diinisialisasi, menggunakan pattern matching');
+                return null;
+            }
+
             const prompt = `Analisis pesan berikut dan tentukan apakah ini adalah transaksi keuangan (pemasukan atau pengeluaran). 
             Jika ya, ekstrak informasi berikut dalam format JSON:
             {
