@@ -79,4 +79,9 @@ session-manager.js
 *.sqlite3
 
 # Config files with sensitive data
-config.json 
+config.json
+
+# WhatsApp session files
+.wwebjs_auth/
+.wwebjs_cache/
+session-backup-*/ 
