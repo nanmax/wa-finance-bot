@@ -106,12 +106,20 @@ class WhatsAppFinanceRenderServer {
             '--disable-renderer-backgrounding'
         ];
 
+        // Konfigurasi path untuk session persistence
         const authPath = process.env.AUTH_PATH || './.wwebjs_auth';
+        const clientId = process.env.CLIENT_ID || 'wa-finance-render';
+        
+        console.log(`🔐 Auth Path: ${authPath}`);
+        console.log(`🆔 Client ID: ${clientId}`);
         
         this.client = new Client({
             authStrategy: new LocalAuth({
-                clientId: 'wa-finance-render',
-                dataPath: authPath
+                clientId: clientId,
+                dataPath: authPath,
+                // Tambahan konfigurasi untuk memastikan session tersimpan
+                backupSyncIntervalMs: 300000, // 5 menit
+                disableInlinedChunksInDataURL: true
             }),
             puppeteer: {
                 headless: true,
@@ -121,7 +129,11 @@ class WhatsAppFinanceRenderServer {
                 ignoreHTTPSErrors: true,
                 timeout: 30000
             },
-            selfMessage: true
+            // Enable self message detection
+            selfMessage: true,
+            // Tambahan konfigurasi untuk session persistence
+            takeoverOnConflict: true,
+            takeoverTimeoutMs: 10000
         });
         
         this.setupWhatsAppEventHandlers();
@@ -222,6 +234,32 @@ class WhatsAppFinanceRenderServer {
     setupAPIRoutes() {
         this.app.get('/api/health', (req, res) => {
             const used = process.memoryUsage();
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Check session files
+            const authPath = process.env.AUTH_PATH || './.wwebjs_auth';
+            const clientId = process.env.CLIENT_ID || 'wa-finance-render';
+            const sessionPath = path.join(authPath, `session-${clientId}`);
+            
+            let sessionExists = false;
+            let sessionInfo = null;
+            
+            try {
+                if (fs.existsSync(sessionPath)) {
+                    sessionExists = true;
+                    const stats = fs.statSync(sessionPath);
+                    sessionInfo = {
+                        exists: true,
+                        lastModified: stats.mtime,
+                        size: stats.size,
+                        path: sessionPath
+                    };
+                }
+            } catch (error) {
+                console.error('Error checking session:', error);
+            }
+            
             res.json({ 
                 status: 'OK', 
                 timestamp: new Date().toISOString(),
@@ -229,7 +267,13 @@ class WhatsAppFinanceRenderServer {
                 connected: this.client.isConnected,
                 authenticated: this.client.authStrategy.isAuthenticated,
                 memory: `${Math.round(used.heapUsed / 1024 / 1024 * 100) / 100} MB`,
-                reconnectAttempts: this.reconnectAttempts
+                reconnectAttempts: this.reconnectAttempts,
+                session: {
+                    exists: sessionExists,
+                    info: sessionInfo,
+                    authPath: authPath,
+                    clientId: clientId
+                }
             });
         });
 
@@ -397,8 +441,74 @@ class WhatsAppFinanceRenderServer {
                 memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024 * 100) / 100} MB`,
                 reconnectAttempts: this.reconnectAttempts,
                 qrUrl: '/qr',
-                qrApi: '/api/qr'
+                qrApi: '/api/qr',
+                sessionInfo: {
+                    authPath: process.env.AUTH_PATH || './.wwebjs_auth',
+                    clientId: process.env.CLIENT_ID || 'wa-finance-render'
+                }
             });
+        });
+
+        // Session management endpoints
+        this.app.get('/api/session/status', (req, res) => {
+            const fs = require('fs');
+            const path = require('path');
+            
+            const authPath = process.env.AUTH_PATH || './.wwebjs_auth';
+            const clientId = process.env.CLIENT_ID || 'wa-finance-render';
+            const sessionPath = path.join(authPath, `session-${clientId}`);
+            
+            try {
+                if (fs.existsSync(sessionPath)) {
+                    const stats = fs.statSync(sessionPath);
+                    res.json({
+                        exists: true,
+                        lastModified: stats.mtime,
+                        size: stats.size,
+                        path: sessionPath,
+                        message: 'Session tersimpan dan siap digunakan'
+                    });
+                } else {
+                    res.json({
+                        exists: false,
+                        message: 'Session belum tersimpan - perlu scan QR code'
+                    });
+                }
+            } catch (error) {
+                res.status(500).json({
+                    error: 'Error checking session',
+                    message: error.message
+                });
+            }
+        });
+
+        this.app.delete('/api/session/clear', (req, res) => {
+            const fs = require('fs');
+            const path = require('path');
+            
+            const authPath = process.env.AUTH_PATH || './.wwebjs_auth';
+            const clientId = process.env.CLIENT_ID || 'wa-finance-render';
+            const sessionPath = path.join(authPath, `session-${clientId}`);
+            
+            try {
+                if (fs.existsSync(sessionPath)) {
+                    fs.rmSync(sessionPath, { recursive: true, force: true });
+                    res.json({
+                        success: true,
+                        message: 'Session berhasil dihapus'
+                    });
+                } else {
+                    res.json({
+                        success: false,
+                        message: 'Session tidak ditemukan'
+                    });
+                }
+            } catch (error) {
+                res.status(500).json({
+                    error: 'Error clearing session',
+                    message: error.message
+                });
+            }
         });
 
         // Group management endpoints
