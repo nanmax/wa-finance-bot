@@ -10,6 +10,7 @@
     "start:whatsapp": "node src/whatsapp-lite.js",
     "start:minimal": "node src/whatsapp-minimal.js",
     "start:persistent": "node src/whatsapp-persistent.js",
+    "start:render-whatsapp": "node src/whatsapp-render.js",
     "dev": "nodemon src/server.js",
     "server": "node src/server.js",
     "api": "node src/server/api.js",
