@@ -1,0 +1,46 @@
+{
+  "name": "wa-finance-bot",
+  "version": "1.0.0",
+  "description": "WhatsApp AI Bot untuk pencatatan keuangan",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/server.js",
+    "server": "node src/server.js",
+    "api": "node src/server/api.js",
+    "test": "jest",
+    "test-bot": "node test-bot.js",
+    "session:status": "node session-manager.js",
+    "session:clear": "node -e \"const SessionManager = require('./session-manager.js'); const manager = new SessionManager(); manager.clearSession();\"",
+    "session:backup": "node -e \"const SessionManager = require('./session-manager.js'); const manager = new SessionManager(); manager.backupSession();\"",
+    "session:fix": "node fix-session-error.js",
+    "start:session": "node session-manager.js && npm run dev"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "ai",
+    "finance",
+    "keuangan"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "cors": "^2.8.5",
+    "cron-parser": "^5.3.0",
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2",
+    "extract-zip": "^2.0.1",
+    "moment": "^2.29.4",
+    "node-cron": "^4.2.1",
+    "openai": "^4.20.1",
+    "qrcode-terminal": "^0.12.0",
+    "sqlite3": "^5.1.6",
+    "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "jest": "^29.7.0",
+    "nodemon": "^3.0.1"
+  }
+}

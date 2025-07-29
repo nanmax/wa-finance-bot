@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Finance Bot Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .card {
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
+        }
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        .income-card {
+            border-left: 4px solid #28a745;
+        }
+        .expense-card {
+            border-left: 4px solid #dc3545;
+        }
+        .summary-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        .transaction-item {
+            border-radius: 10px;
+            margin-bottom: 10px;
+        }
+        .btn-custom {
+            border-radius: 25px;
+            padding: 10px 25px;
+        }
+        .loading {
+            display: none;
+        }
+        .status-indicator {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 5px;
+        }
+        .status-online {
+            background-color: #28a745;
+        }
+        .status-offline {
+            background-color: #dc3545;
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid">
+        <!-- Header -->
+        <div class="row bg-primary text-white p-3">
+            <div class="col">
+                <h1><i class="fas fa-chart-line"></i> Finance Bot Dashboard</h1>
+                <p class="mb-0">Monitoring transaksi keuangan WhatsApp Group</p>
+            </div>
+            <div class="col-auto d-flex align-items-center">
+                <span class="status-indicator status-online" id="botStatus"></span>
+                <span id="botStatusText">Bot Online</span>
+            </div>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="row mt-4">
+            <div class="col-md-3">
+                <div class="card summary-card">
+                    <div class="card-body text-center">
+                        <i class="fas fa-wallet fa-2x mb-2"></i>
+                        <h4 id="totalBalance">Rp 0</h4>
+                        <p class="mb-0">Total Saldo</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card income-card">
+                    <div class="card-body text-center">
+                        <i class="fas fa-arrow-up text-success fa-2x mb-2"></i>
+                        <h4 id="totalIncome">Rp 0</h4>
+                        <p class="mb-0">Total Pemasukan</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card expense-card">
+                    <div class="card-body text-center">
+                        <i class="fas fa-arrow-down text-danger fa-2x mb-2"></i>
+                        <h4 id="totalExpense">Rp 0</h4>
+                        <p class="mb-0">Total Pengeluaran</p>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="card">
+                    <div class="card-body text-center">
+                        <i class="fas fa-list fa-2x mb-2 text-info"></i>
+                        <h4 id="totalTransactions">0</h4>
+                        <p class="mb-0">Total Transaksi</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manual Entry -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5><i class="fas fa-plus"></i> Tambah Transaksi Manual</h5>
+                    </div>
+                    <div class="card-body">
+                        <form id="transactionForm">
+                            <div class="row">
+                                <div class="col-md-2">
+                                    <select class="form-select" id="transactionType" required>
+                                        <option value="">Pilih Tipe</option>
+                                        <option value="income">Pemasukan</option>
+                                        <option value="expense">Pengeluaran</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="number" class="form-control" id="amount" placeholder="Jumlah" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <input type="text" class="form-control" id="description" placeholder="Deskripsi" required>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="text" class="form-control" id="category" placeholder="Kategori" required>
+                                </div>
+                                <div class="col-md-2">
+                                    <input type="text" class="form-control" id="author" placeholder="Oleh" value="Manual Entry">
+                                </div>
+                                <div class="col-md-1">
+                                    <button type="submit" class="btn btn-primary btn-custom">
+                                        <i class="fas fa-save"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transactions Table -->
+        <div class="row mt-4">
+            <div class="col-md-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5><i class="fas fa-history"></i> Riwayat Transaksi</h5>
+                        <div>
+                            <button class="btn btn-outline-primary btn-sm" onclick="refreshData()">
+                                <i class="fas fa-sync-alt"></i> Refresh
+                            </button>
+                            <button class="btn btn-outline-danger btn-sm" onclick="clearAllTransactions()">
+                                <i class="fas fa-trash"></i> Clear All
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="table-responsive">
+                            <table class="table table-hover">
+                                <thead>
+                                    <tr>
+                                        <th>ID</th>
+                                        <th>Tipe</th>
+                                        <th>Jumlah</th>
+                                        <th>Deskripsi</th>
+                                        <th>Kategori</th>
+                                        <th>Oleh</th>
+                                        <th>Tanggal</th>
+                                        <th>Aksi</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="transactionsTable">
+                                    <tr>
+                                        <td colspan="8" class="text-center">
+                                            <div class="loading">
+                                                <div class="spinner-border text-primary" role="status">
+                                                    <span class="visually-hidden">Loading...</span>
+                                                </div>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="js/dashboard.js"></script>
+</body>
+</html> 
