@@ -68,7 +68,6 @@ class WhatsAppLiteServer {
                 headless: true,
                 args: puppeteerArgs,
                 executablePath: process.env.GOOGLE_CHROME_BIN || '/usr/bin/google-chrome-stable',
-                // Memory optimization
                 defaultViewport: { width: 800, height: 600 },
                 ignoreHTTPSErrors: true,
                 timeout: 30000
@@ -80,30 +79,20 @@ class WhatsAppLiteServer {
     }
 
     setupWhatsAppEventHandlers() {
-        // Loading screen
-        this.client.on('loading_screen', (percent, message) => {
-            console.log(`🔄 Loading WhatsApp: ${percent}% - ${message}`);
-        });
-
-        // QR Code generation
+        // QR Code generation (penting untuk login)
         this.client.on('qr', (qr) => {
             console.log('📱 QR Code untuk login WhatsApp:');
-            console.log('💡 Scan QR code ini dengan WhatsApp di HP Anda');
             qrcode.generate(qr, { small: true });
         });
 
-        // Client ready
+        // Client ready (penting untuk status)
         this.client.on('ready', () => {
-            console.log('✅ WhatsApp Finance Bot siap di Render!');
-            console.log('🔗 Session tersimpan di: ./.wwebjs_auth/');
-            console.log('📊 Bot akan memantau pesan di group WhatsApp...');
-            console.log(`💾 Memory usage: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024 * 100) / 100} MB`);
+            console.log('✅ WhatsApp Bot siap di Render!');
         });
 
-        // Authenticated
+        // Authenticated (penting untuk status)
         this.client.on('authenticated', () => {
             console.log('🔐 WhatsApp berhasil terautentikasi!');
-            console.log('💾 Session akan tersimpan untuk penggunaan selanjutnya');
         });
 
         // Message handling
@@ -115,19 +104,17 @@ class WhatsAppLiteServer {
             }
         });
 
-        // Authentication failure
+        // Authentication failure (penting untuk debug)
         this.client.on('auth_failure', (msg) => {
             console.error('❌ Autentikasi WhatsApp gagal:', msg);
-            console.log('💡 Coba hapus folder .wwebjs_auth/ dan scan QR code lagi');
         });
 
-        // Disconnected
+        // Disconnected (penting untuk status)
         this.client.on('disconnected', (reason) => {
             console.log('❌ WhatsApp terputus:', reason);
-            console.log('🔄 Mencoba menghubungkan kembali...');
         });
 
-        // Error handling
+        // Error handling (penting untuk debug)
         this.client.on('error', (error) => {
             console.error('WhatsApp client error:', error);
         });
@@ -219,8 +206,6 @@ class WhatsAppLiteServer {
     }
 
     async handleWhatsAppMessage(message) {
-        console.log("📱 Message received:", message.body);
-        
         // Simple echo for testing
         if (message.body.toLowerCase() === 'ping') {
             await message.reply('Pong! Bot is working! 🚀');
@@ -228,7 +213,6 @@ class WhatsAppLiteServer {
         
         // Handle group messages
         if (message.from.endsWith('@g.us') && !message.fromMe) {
-            console.log(`📨 Group message: ${message.body}`);
             await message.reply('Bot received your message! 📝');
         }
     }
@@ -236,14 +220,11 @@ class WhatsAppLiteServer {
     async start() {
         try {
             console.log('🚀 Starting WhatsApp Lite Server...');
-            console.log(`💾 Initial memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024 * 100) / 100} MB`);
             
             // Start API server first
             const port = process.env.PORT || 3000;
             this.app.listen(port, () => {
                 console.log(`🚀 API Server running on port ${port}`);
-                console.log(`📊 API available at http://localhost:${port}/api`);
-                console.log(`🔗 Health check at http://localhost:${port}/api/health`);
             });
             
             // Start WhatsApp client
