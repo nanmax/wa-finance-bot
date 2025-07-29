@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp QR Code Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        .header {
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            font-weight: bold;
+            font-size: 1.1em;
+            transition: all 0.3s ease;
+        }
+        
+        .status.disconnected {
+            background: rgba(244, 67, 54, 0.8);
+            border: 2px solid #f44336;
+        }
+        
+        .status.qr_ready {
+            background: rgba(255, 152, 0, 0.8);
+            border: 2px solid #ff9800;
+        }
+        
+        .status.connected {
+            background: rgba(76, 175, 80, 0.8);
+            border: 2px solid #4caf50;
+        }
+        
+        .qr-container {
+            background: white;
+            border-radius: 15px;
+            padding: 30px;
+            margin: 20px 0;
+            display: inline-block;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+        
+        .qr-container h3 {
+            color: #333;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+        }
+        
+        #qr-image {
+            max-width: 300px;
+            width: 100%;
+            height: auto;
+            border-radius: 10px;
+        }
+        
+        .qr-time {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 10px;
+        }
+        
+        .instructions {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            padding: 25px;
+            margin: 25px 0;
+            text-align: left;
+        }
+        
+        .instructions h3 {
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .instructions ol {
+            padding-left: 20px;
+        }
+        
+        .instructions li {
+            margin: 10px 0;
+            line-height: 1.5;
+        }
+        
+        .buttons {
+            margin-top: 30px;
+        }
+        
+        .btn {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: all 0.3s ease;
+            font-weight: bold;
+        }
+        
+        .btn:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+        
+        .btn.secondary {
+            background: #2196F3;
+        }
+        
+        .btn.secondary:hover {
+            background: #1976D2;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .error {
+            background: rgba(244, 67, 54, 0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px 0;
+            display: none;
+        }
+        
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+                margin: 20px;
+            }
+            
+            .header h1 {
+                font-size: 2em;
+            }
+            
+            #qr-image {
+                max-width: 250px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📱 WhatsApp QR Code Login</h1>
+            <p>Scan QR Code untuk menghubungkan WhatsApp Bot</p>
+        </div>
+        
+        <div id="status" class="status disconnected">
+            <span class="loading"></span> Menunggu QR Code...
+        </div>
+        
+        <div id="qr-container" class="qr-container" style="display: none;">
+            <h3>Scan QR Code ini dengan WhatsApp</h3>
+            <img id="qr-image" src="" alt="QR Code">
+            <div class="qr-time">Generated: <span id="qr-time">-</span></div>
+        </div>
+        
+        <div class="instructions">
+            <h3>📋 Cara Login:</h3>
+            <ol>
+                <li>Buka WhatsApp di HP Anda</li>
+                <li>Pilih Menu (3 titik) → WhatsApp Web</li>
+                <li>Scan QR Code yang muncul di atas</li>
+                <li>Tunggu hingga status berubah menjadi "Connected"</li>
+                <li>Bot akan otomatis memantau pesan di group yang terdaftar</li>
+            </ol>
+        </div>
+        
+        <div class="error" id="error-message"></div>
+        
+        <div class="buttons">
+            <button class="btn" onclick="checkStatus()">
+                🔄 Refresh Status
+            </button>
+            <button class="btn secondary" onclick="location.reload()">
+                🔄 Reload Page
+            </button>
+        </div>
+    </div>
+    
+    <script>
+        let checkInterval;
+        
+        function showError(message) {
+            const errorDiv = document.getElementById('error-message');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            setTimeout(() => {
+                errorDiv.style.display = 'none';
+            }, 5000);
+        }
+        
+        function updateStatus(status, message) {
+            const statusDiv = document.getElementById('status');
+            const qrContainer = document.getElementById('qr-container');
+            const qrImage = document.getElementById('qr-image');
+            const qrTime = document.getElementById('qr-time');
+            
+            // Remove loading animation
+            statusDiv.innerHTML = message;
+            
+            // Update status class
+            statusDiv.className = 'status ' + status;
+            
+            if (status === 'qr_ready') {
+                // QR code is available
+                qrContainer.style.display = 'block';
+            } else if (status === 'connected') {
+                // Connected successfully
+                qrContainer.style.display = 'none';
+                clearInterval(checkInterval);
+            } else {
+                // Disconnected or waiting
+                qrContainer.style.display = 'none';
+            }
+        }
+        
+        function checkStatus() {
+            fetch('/api/qr')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.json();
+                })
+                .then(data => {
+                    if (data.qrCode) {
+                        // QR code is available
+                        document.getElementById('qr-image').src = data.qrCode;
+                        document.getElementById('qr-time').textContent = 
+                            new Date(data.generatedAt).toLocaleString('id-ID');
+                        updateStatus('qr_ready', 'QR Code Tersedia - Scan dengan WhatsApp');
+                    } else if (data.status === 'connected') {
+                        updateStatus('connected', '✅ WhatsApp Terhubung! Bot siap digunakan.');
+                    } else if (data.status === 'authenticated') {
+                        updateStatus('connected', '✅ WhatsApp Terautentikasi! Menunggu koneksi...');
+                    } else {
+                        updateStatus('disconnected', '⏳ Menunggu QR Code...');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    showError('Error checking status: ' + error.message);
+                    updateStatus('disconnected', '❌ Error - Coba refresh halaman');
+                });
+        }
+        
+        // Check status every 3 seconds
+        checkInterval = setInterval(checkStatus, 3000);
+        
+        // Initial check
+        checkStatus();
+        
+        // Also check when page becomes visible
+        document.addEventListener('visibilitychange', function() {
+            if (!document.hidden) {
+                checkStatus();
+            }
+        });
+    </script>
+</body>
+</html> 
