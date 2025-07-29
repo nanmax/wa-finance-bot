@@ -12,6 +12,7 @@
     "start:persistent": "node src/whatsapp-persistent.js",
     "start:render-whatsapp": "node src/whatsapp-render.js",
     "start:stable": "node src/whatsapp-stable.js",
+    "start:finance": "node src/whatsapp-finance-render.js",
     "dev": "nodemon src/server.js",
     "server": "node src/server.js",
     "api": "node src/server/api.js",
