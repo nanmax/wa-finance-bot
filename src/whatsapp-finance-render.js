@@ -129,6 +129,9 @@ class WhatsAppFinanceRenderServer {
         console.log(`🔐 Auth Path: ${authPath}`);
         console.log(`🆔 Client ID: ${clientId}`);
         
+        // Clean up session if there are issues
+        this.cleanupSession(authPath, clientId);
+        
         this.client = new Client({
             authStrategy: new LocalAuth({
                 clientId: clientId,
@@ -155,41 +158,73 @@ class WhatsAppFinanceRenderServer {
         this.setupWhatsAppEventHandlers();
     }
 
+    cleanupSession(authPath, clientId) {
+        try {
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Check if session directory exists
+            const sessionPath = path.join(authPath, `session-${clientId}`);
+            if (fs.existsSync(sessionPath)) {
+                console.log('🧹 Cleaning up existing session...');
+                
+                // Try to remove problematic files
+                const problematicFiles = [
+                    'Default/Cookies-journal',
+                    'Default/Cookies',
+                    'Default/Web Data-journal',
+                    'Default/Web Data'
+                ];
+                
+                problematicFiles.forEach(file => {
+                    const filePath = path.join(sessionPath, file);
+                    if (fs.existsSync(filePath)) {
+                        try {
+                            fs.unlinkSync(filePath);
+                            console.log(`✅ Cleaned: ${file}`);
+                        } catch (error) {
+                            console.log(`⚠️ Could not clean ${file}: ${error.message}`);
+                        }
+                    }
+                });
+            }
+        } catch (error) {
+            console.log('⚠️ Session cleanup error:', error.message);
+        }
+    }
+
     setupFinanceBot() {
         this.backupService = new BackupService(this.db);
         this.financeBot = new FinanceBot(this.db, this.aiService, this.backupService, null);
     }
 
-    async safeSendMessage(chatId, text) {
-        if (!chatId || !text) {
-            console.log('⚠️ Invalid chatId or text for sending message');
+    async safeSendMessage(message, text) {
+        if (!message || !text) {
+            console.log('⚠️ Invalid message or text for sending reply');
+            return false;
+        }
+
+        // Skip sending if message is from undefined
+        if (!message.from) {
+            console.log('⚠️ No chat ID found, skipping reply');
+            return false;
+        }
+
+        // Check if client is connected
+        if (!this.client || !this.client.isConnected) {
+            console.log('⚠️ Client not connected, skipping reply');
             return false;
         }
 
         try {
-            // Method 1: Direct send
-            await this.client.sendMessage(chatId, text);
-            console.log('✅ Message sent successfully to:', chatId);
+            // Simple direct send without reply - most reliable
+            await this.client.sendMessage(message.from, text);
+            console.log('✅ Message sent successfully to:', message.from);
             return true;
         } catch (error) {
-            console.log('Method 1 failed:', error.message);
+            console.error('❌ Failed to send message:', error.message);
+            return false;
         }
-
-        try {
-            // Method 2: Get chat and send
-            const chats = await this.client.getChats();
-            const chat = chats.find(c => c.id._serialized === chatId);
-            if (chat) {
-                await chat.sendMessage(text);
-                console.log('✅ Message sent via chat object to:', chatId);
-                return true;
-            }
-        } catch (error) {
-            console.log('Method 2 failed:', error.message);
-        }
-
-        console.error('❌ All send methods failed for chat:', chatId);
-        return false;
     }
 
 
@@ -233,14 +268,27 @@ class WhatsAppFinanceRenderServer {
         this.client.on('disconnected', (reason) => {
             console.log('❌ WhatsApp terputus:', reason);
             this.connectionStatus = 'disconnected';
+            
+            // Clean up session on logout
+            if (reason === 'LOGOUT') {
+                console.log('🧹 Logout detected, cleaning session...');
+                this.cleanupSession(process.env.AUTH_PATH || './.wwebjs_auth', process.env.CLIENT_ID || 'wa-finance-render');
+            }
+            
             this.attemptReconnect();
         });
 
                 this.client.on('message', async (message) => {
             try {
+                // Skip invalid messages
+                if (!message || !message.from || !message.body) {
+                    console.log('⚠️ Invalid message received, skipping');
+                    return;
+                }
+
                 // Log group info untuk debugging
                 if (message.from.endsWith('@g.us')) {
-                    console.log(`📱 Group Message - ID: ${message.from}, Name: ${message._data.notifyName || 'Unknown'}, Sender: ${message.author || 'Unknown'}`);
+                    console.log(`📱 Group Message - ID: ${message.from}, Name: ${message._data?.notifyName || 'Unknown'}, Sender: ${message.author || 'Unknown'}`);
                 }
                 
                 // Get contact name
@@ -249,14 +297,7 @@ class WhatsAppFinanceRenderServer {
                     if (message._data && message._data.notifyName) {
                         contactName = message._data.notifyName;
                     } else if (message.author) {
-                        const contact = await message.getContact();
-                        if (contact && contact.pushname) {
-                            contactName = contact.pushname;
-                        } else if (contact && contact.name) {
-                            contactName = contact.name;
-                        } else {
-                            contactName = message.author.split('@')[0];
-                        }
+                        contactName = message.author.split('@')[0];
                     }
                 } catch (error) {
                     console.log('⚠️ Tidak bisa mendapatkan nama kontak, menggunakan author');
@@ -265,7 +306,7 @@ class WhatsAppFinanceRenderServer {
                 
                 const result = await this.financeBot.processMessage(message.body, message.author, contactName);
                 if (result) {
-                    await this.safeSendMessage(message.from, result);
+                    await this.safeSendMessage(message, result);
                 }
             } catch (error) {
                 console.error('Message error:', error.message);
@@ -274,6 +315,12 @@ class WhatsAppFinanceRenderServer {
 
         this.client.on('message_create', async (message) => {
             try {
+                // Skip invalid messages
+                if (!message || !message.from || !message.body) {
+                    console.log('⚠️ Invalid self message received, skipping');
+                    return;
+                }
+
                 if (message.fromMe) {
                     // Get contact name for self messages
                     let contactName = message.author || 'Unknown';
@@ -281,14 +328,7 @@ class WhatsAppFinanceRenderServer {
                         if (message._data && message._data.notifyName) {
                             contactName = message._data.notifyName;
                         } else if (message.author) {
-                            const contact = await message.getContact();
-                            if (contact && contact.pushname) {
-                                contactName = contact.pushname;
-                            } else if (contact && contact.name) {
-                                contactName = contact.name;
-                            } else {
-                                contactName = message.author.split('@')[0];
-                            }
+                            contactName = message.author.split('@')[0];
                         }
                     } catch (error) {
                         console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan author');
@@ -297,7 +337,7 @@ class WhatsAppFinanceRenderServer {
                     
                     const result = await this.financeBot.processMessage(message.body, message.author, contactName);
                     if (result) {
-                        await this.safeSendMessage(message.from, result);
+                        await this.safeSendMessage(message, result);
                     }
                 }
             } catch (error) {
