@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: wa-finance-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm run start:simple
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3000
+      - key: BOT_NAME
+        value: FinanceBot
+      # Tambahkan environment variables lain di dashboard Render:
+      # - OPENAI_API_KEY
+      # - WHATSAPP_GROUP_ID
+      # - DB_PATH
+    healthCheckPath: /api/health
+    autoDeploy: true 

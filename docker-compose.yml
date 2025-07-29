@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  wa-finance-bot:
+    build: .
+    container_name: wa-finance-bot
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    env_file:
+      - .env
+    volumes:
+      # Persist WhatsApp session
+      - ./data:/app/data
+      - ./backups:/app/backups
+      - ./.wwebjs_auth:/app/.wwebjs_auth
+      - ./.wwebjs_cache:/app/.wwebjs_cache
+    restart: unless-stopped
+    # Add security options for Chrome
+    security_opt:
+      - seccomp:unconfined
+    # Add shared memory for Chrome
+    shm_size: '2gb'
+    # Add capabilities for Chrome
+    cap_add:
+      - SYS_ADMIN
+
+  # Optional: Add database service
+  # postgres:
+  #   image: postgres:15
+  #   container_name: wa-finance-db
+  #   environment:
+  #     POSTGRES_DB: wa_finance
+  #     POSTGRES_USER: wa_finance_user
+  #     POSTGRES_PASSWORD: your_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   ports:
+  #     - "5432:5432"
+
+volumes:
+  postgres_data: 
