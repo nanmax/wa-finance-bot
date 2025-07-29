@@ -142,7 +142,10 @@ class WhatsAppFinanceRenderServer {
             }),
             puppeteer: {
                 headless: true,
-                args: puppeteerArgs,
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox'
+                ],
                 executablePath: undefined,
                 defaultViewport: { width: 640, height: 480 },
                 ignoreHTTPSErrors: true,
@@ -230,23 +233,26 @@ class WhatsAppFinanceRenderServer {
 
 
     setupWhatsAppEventHandlers() {
+        // Loading screen
+        this.client.on('loading_screen', (percent, message) => {
+            console.log(`🔄 Loading WhatsApp: ${percent}% - ${message}`);
+        });
+
+        // QR Code generation
         this.client.on('qr', async (qr) => {
-            console.log('QR Code untuk login WhatsApp:');
+            console.log('📱 QR Code untuk login WhatsApp:');
             qrcode.generate(qr, { small: true });
-            
-            // Generate QR code image untuk web
             try {
                 this.currentQRCode = await qrcodeImage.toDataURL(qr);
                 this.qrGeneratedAt = new Date();
                 console.log('✅ QR Code tersedia di: /api/qr');
-                console.log('📱 Scan QR code di browser atau WhatsApp');
             } catch (error) {
                 console.error('Error generating QR image:', error);
             }
-            
             this.connectionStatus = 'qr_ready';
         });
 
+        // Client ready
         this.client.on('ready', () => {
             console.log('✅ WhatsApp Finance Bot siap di Render!');
             this.connectionStatus = 'connected';
@@ -254,97 +260,141 @@ class WhatsAppFinanceRenderServer {
             this.currentQRCode = null; // Clear QR code after successful login
         });
 
+        // Authenticated
         this.client.on('authenticated', () => {
             console.log('🔐 WhatsApp berhasil terautentikasi!');
             this.connectionStatus = 'authenticated';
             this.currentQRCode = null; // Clear QR code after authentication
         });
 
+        // Authentication failure
         this.client.on('auth_failure', (msg) => {
             console.error('❌ Autentikasi WhatsApp gagal:', msg);
             this.connectionStatus = 'auth_failed';
         });
 
+        // Disconnected
         this.client.on('disconnected', (reason) => {
             console.log('❌ WhatsApp terputus:', reason);
             this.connectionStatus = 'disconnected';
-            
-            // Clean up session on logout
+            // Clean up session on logout only
             if (reason === 'LOGOUT') {
                 console.log('🧹 Logout detected, cleaning session...');
                 this.cleanupSession(process.env.AUTH_PATH || './.wwebjs_auth', process.env.CLIENT_ID || 'wa-finance-render');
             }
-            
-            this.attemptReconnect();
+            // Sederhanakan reconnect
+            setTimeout(() => {
+                this.client.initialize();
+            }, 5000);
         });
 
-                this.client.on('message', async (message) => {
-            try {
-                // Skip invalid messages
-                if (!message || !message.from || !message.body) {
-                    console.log('⚠️ Invalid message received, skipping');
+        // Gabungkan logika ke satu fungsi
+        this.handleWhatsAppMessage = async (message) => {
+            console.log("=========== handleWhatsAppMessage ===========", message.from);
+            console.log("📱 Message details:", {
+                from: message.from,
+                fromMe: message.fromMe,
+                author: message.author,
+                body: message.body
+            });
+            if (message._data) {
+                console.log("📱 Message _data:", {
+                    notifyName: message._data.notifyName,
+                    pushName: message._data.pushName,
+                    verifiedName: message._data.verifiedName
+                });
+            }
+
+            // Handle file upload for restore
+            if (message.hasMedia && (message.type === 'document' || message.type === 'application/zip')) {
+                if (typeof this.handleFileUpload === 'function') {
+                    return await this.handleFileUpload(message);
+                }
+            }
+
+            // Handle group messages (from other people)
+            if (message.from.endsWith('@g.us') && !message.fromMe) {
+                const allowedGroups = this.groupConfig && this.groupConfig.groups ? this.groupConfig.groups.map(g => g.id) : [];
+                const defaultGroup = this.groupConfig && this.groupConfig.defaultGroup;
+                const isGroupAllowed = allowedGroups.includes(message.from) || (defaultGroup && message.from === defaultGroup);
+                if (!isGroupAllowed) {
+                    console.log(`⚠️ Group ${message.from} tidak terdaftar, diabaikan`);
+                    console.log(`💡 Daftar group yang diizinkan: ${JSON.stringify(allowedGroups)}`);
                     return;
                 }
+                console.log(`✅ Group ${message.from} terdaftar, memproses pesan...`);
 
-                // Log group info untuk debugging
-                if (message.from.endsWith('@g.us')) {
-                    console.log(`📱 Group Message - ID: ${message.from}, Name: ${message._data?.notifyName || 'Unknown'}, Sender: ${message.author || 'Unknown'}`);
-                }
-                
-                // Get contact name
-                let contactName = message.author || 'Unknown';
+                let contactName = message.author;
                 try {
                     if (message._data && message._data.notifyName) {
                         contactName = message._data.notifyName;
-                    } else if (message.author) {
-                        contactName = message.author.split('@')[0];
+                        console.log(`✅ Menggunakan notifyName: ${contactName}`);
+                    } else {
+                        const contact = await message.getContact();
+                        if (contact && contact.pushname) {
+                            contactName = contact.pushname;
+                            console.log(`✅ Menggunakan pushname: ${contactName}`);
+                        } else if (contact && contact.name) {
+                            contactName = contact.name;
+                            console.log(`✅ Menggunakan contact.name: ${contactName}`);
+                        } else {
+                            contactName = message.author.split('@')[0];
+                            console.log(`⚠️ Menggunakan formatted phone: ${contactName}`);
+                        }
                     }
                 } catch (error) {
-                    console.log('⚠️ Tidak bisa mendapatkan nama kontak, menggunakan author');
-                    contactName = message.author ? message.author.split('@')[0] : 'Unknown';
+                    console.log('⚠️ Tidak bisa mendapatkan nama kontak, menggunakan formatted author');
+                    contactName = message.author.split('@')[0];
                 }
-                
+
                 const result = await this.financeBot.processMessage(message.body, message.author, contactName);
                 if (result) {
-                    await this.safeSendMessage(message, result);
+                    await message.reply(result);
+                    console.log(`✅ Response terkirim: ${result}`);
                 }
-            } catch (error) {
-                console.error('Message error:', error.message);
             }
-        });
-
-        this.client.on('message_create', async (message) => {
-            try {
-                // Skip invalid messages
-                if (!message || !message.from || !message.body) {
-                    console.log('⚠️ Invalid self message received, skipping');
-                    return;
-                }
-
-                if (message.fromMe) {
-                    // Get contact name for self messages
-                    let contactName = message.author || 'Unknown';
-                    try {
-                        if (message._data && message._data.notifyName) {
-                            contactName = message._data.notifyName;
-                        } else if (message.author) {
+            // Handle self messages to registered groups (chat via pribadi)
+            else if (message.fromMe && message.from.endsWith('@c.us') && message.author) {
+                let contactName = message.author;
+                try {
+                    if (message._data && message._data.notifyName) {
+                        contactName = message._data.notifyName;
+                        console.log(`✅ Self message - Menggunakan notifyName: ${contactName}`);
+                    } else {
+                        const contact = await message.getContact();
+                        if (contact && contact.pushname) {
+                            contactName = contact.pushname;
+                            console.log(`✅ Self message - Menggunakan pushname: ${contactName}`);
+                        } else if (contact && contact.name) {
+                            contactName = contact.name;
+                            console.log(`✅ Self message - Menggunakan contact.name: ${contactName}`);
+                        } else {
                             contactName = message.author.split('@')[0];
+                            console.log(`⚠️ Self message - Menggunakan formatted phone: ${contactName}`);
                         }
-                    } catch (error) {
-                        console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan author');
-                        contactName = message.author ? message.author.split('@')[0] : 'Unknown';
                     }
-                    
-                    const result = await this.financeBot.processMessage(message.body, message.author, contactName);
-                    if (result) {
-                        await this.safeSendMessage(message, result);
-                    }
+                } catch (error) {
+                    console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan formatted author');
+                    contactName = message.author.split('@')[0];
                 }
-            } catch (error) {
-                console.error('Self message error:', error.message);
+                const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                if (result) {
+                    await message.reply(result);
+                    console.log(`✅ Response terkirim ke chat: ${result}`);
+                }
             }
-        });
+            // Ignore all other messages
+            else {
+                console.log(`🚫 Pesan diabaikan: ${message.body}`);
+                console.log(`📱 Jenis: ${message.fromMe ? 'Self' : 'Other'} - ${message.from.endsWith('@g.us') ? 'Group' : 'Private'}`);
+            }
+        };
 
+        // Event handler panggil fungsi yang sama
+        this.client.on('message', this.handleWhatsAppMessage);
+        this.client.on('message_create', this.handleWhatsAppMessage);
+
+        // Error handler
         this.client.on('error', (error) => {
             console.error('Client error:', error.message);
             this.connectionStatus = 'error';
@@ -773,26 +823,20 @@ class WhatsAppFinanceRenderServer {
 
     async start() {
         try {
-            console.log('🚀 Starting WhatsApp Finance Render Server...');
-            
+            // Inisialisasi database
+            await this.db.init();
+            console.log('✅ Database berhasil diinisialisasi');
+
+            // Inisialisasi WhatsApp client
+            await this.client.initialize();
+            console.log('🚀 WhatsApp Bot sedang memulai...');
+
+            // Jalankan API server setelah WhatsApp client siap
             const port = process.env.PORT || 3000;
             this.app.listen(port, () => {
                 console.log(`🚀 Server running on port ${port}`);
                 console.log(`📊 Group management: http://localhost:${port}/api/groups`);
             });
-            
-            await this.client.initialize();
-            console.log('WhatsApp initialized');
-            
-            // Periodic connection check
-            setInterval(() => {
-                if (!this.client.isConnected && this.connectionStatus === 'connected') {
-                    console.log('Connection lost, attempting reconnect...');
-                    this.connectionStatus = 'disconnected';
-                    this.attemptReconnect();
-                }
-            }, 30000); // Check every 30 seconds
-            
         } catch (error) {
             console.error('Start error:', error.message);
             process.exit(1);
