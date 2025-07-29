@@ -85,3 +85,4 @@ config.json
 .wwebjs_auth/
 .wwebjs_cache/
 session-backup-*/ 
+.vercel
