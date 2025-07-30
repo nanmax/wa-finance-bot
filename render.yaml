@@ -4,11 +4,17 @@ services:
     env: node
     plan: free
     buildCommand: npm install
-    startCommand: npm run start:finance
+    startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
+      - key: RENDER
+        value: true
+      - key: RENDER_PLAN
+        value: free
       - key: AUTH_PATH
-        value: /tmp/.wwebjs_auth
+        value: /opt/render/project/src/.wwebjs_auth
+      - key: CLIENT_ID
+        value: wa-finance-render
     healthCheckPath: /api/health
     autoDeploy: true 

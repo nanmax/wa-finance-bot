@@ -30,6 +30,19 @@ class WhatsAppFinanceRenderServer {
         
         // Check environment variables
         this.checkEnvironment();
+        
+        // Konfigurasi khusus untuk Render
+        this.isRenderEnvironment = process.env.RENDER || process.env.NODE_ENV === 'production';
+        if (this.isRenderEnvironment) {
+            console.log('🚀 Render environment detected, applying special configurations');
+            this.maxReconnectAttempts = 10; // Lebih banyak percobaan di Render
+            
+            // Konfigurasi khusus untuk plan free
+            if (process.env.RENDER_PLAN === 'free' || !process.env.RENDER_PLAN) {
+                console.log('💰 Free plan detected, applying memory optimizations');
+                this.maxReconnectAttempts = 5; // Kurangi percobaan untuk menghemat resource
+            }
+        }
     }
 
     checkEnvironment() {
@@ -100,7 +113,7 @@ class WhatsAppFinanceRenderServer {
             '--no-zygote',
             '--disable-gpu',
             '--memory-pressure-off',
-            '--max_old_space_size=256',
+            '--max_old_space_size=128',
             '--disable-extensions',
             '--disable-plugins',
             '--disable-images',
@@ -119,7 +132,22 @@ class WhatsAppFinanceRenderServer {
             '--single-process',
             '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding'
+            '--disable-renderer-backgrounding',
+            // Optimasi untuk plan free
+            '--disable-background-networking',
+            '--safebrowsing-disable-auto-update',
+            '--disable-client-side-phishing-detection',
+            '--disable-component-update',
+            '--disable-domain-reliability',
+            '--disable-features=TranslateUI',
+            '--disable-ipc-flooding-protection',
+            '--disable-hang-monitor',
+            '--disable-prompt-on-repost',
+            '--disable-field-trial-config',
+            '--disable-back-forward-cache',
+            '--disable-http2',
+            '--disable-gpu-sandbox',
+            '--disable-software-rasterizer'
         ];
 
         // Konfigurasi path untuk session persistence
@@ -142,10 +170,7 @@ class WhatsAppFinanceRenderServer {
             }),
             puppeteer: {
                 headless: true,
-                args: [
-                    '--no-sandbox',
-                    '--disable-setuid-sandbox'
-                ],
+                args: puppeteerArgs,
                 executablePath: undefined,
                 defaultViewport: { width: 640, height: 480 },
                 ignoreHTTPSErrors: true,
@@ -282,10 +307,8 @@ class WhatsAppFinanceRenderServer {
                 console.log('🧹 Logout detected, cleaning session...');
                 this.cleanupSession(process.env.AUTH_PATH || './.wwebjs_auth', process.env.CLIENT_ID || 'wa-finance-render');
             }
-            // Sederhanakan reconnect
-            setTimeout(() => {
-                this.client.initialize();
-            }, 5000);
+            // Perbaiki reconnect untuk Render
+            this.attemptReconnect();
         });
 
         // Gabungkan logika ke satu fungsi
@@ -408,14 +431,18 @@ class WhatsAppFinanceRenderServer {
             
             setTimeout(async () => {
                 try {
+                    // Reset connection status
+                    this.connectionStatus = 'reconnecting';
                     await this.client.initialize();
                 } catch (error) {
                     console.error('Reconnect failed:', error.message);
+                    this.connectionStatus = 'disconnected';
                     this.attemptReconnect();
                 }
             }, 5000);
         } else {
             console.error('❌ Max reconnect attempts reached');
+            this.connectionStatus = 'failed';
         }
     }
 
@@ -823,23 +850,65 @@ class WhatsAppFinanceRenderServer {
 
     async start() {
         try {
-            // Inisialisasi database
-            await this.db.init();
-            console.log('✅ Database berhasil diinisialisasi');
-
-            // Inisialisasi WhatsApp client
-            await this.client.initialize();
-            console.log('🚀 WhatsApp Bot sedang memulai...');
-
-            // Jalankan API server setelah WhatsApp client siap
+            console.log('🚀 Starting WhatsApp Finance Render Server...');
+            
+            // Jalankan API server terlebih dahulu untuk Render
             const port = process.env.PORT || 3000;
             this.app.listen(port, () => {
                 console.log(`🚀 Server running on port ${port}`);
                 console.log(`📊 Group management: http://localhost:${port}/api/groups`);
+                console.log(`🔗 Health check: http://localhost:${port}/api/health`);
+                console.log(`📱 QR Login: http://localhost:${port}/login`);
             });
+            
+            // Inisialisasi database
+            await this.db.init();
+            console.log('✅ Database berhasil diinisialisasi');
+
+            // Inisialisasi WhatsApp client dengan retry untuk Render
+            if (this.isRenderEnvironment) {
+                console.log('🔄 Render environment: Initializing WhatsApp with retry mechanism...');
+                let initAttempts = 0;
+                const maxInitAttempts = 3;
+                
+                while (initAttempts < maxInitAttempts) {
+                    try {
+                        await this.client.initialize();
+                        console.log('✅ WhatsApp client initialized successfully');
+                        break;
+                    } catch (error) {
+                        initAttempts++;
+                        console.error(`❌ WhatsApp initialization attempt ${initAttempts} failed:`, error.message);
+                        if (initAttempts < maxInitAttempts) {
+                            console.log(`🔄 Retrying in 10 seconds...`);
+                            await new Promise(resolve => setTimeout(resolve, 10000));
+                        } else {
+                            console.error('❌ Max initialization attempts reached, but server will continue running');
+                        }
+                    }
+                }
+            } else {
+                await this.client.initialize();
+                console.log('✅ WhatsApp client initialized successfully');
+            }
+            
+            console.log('🚀 WhatsApp Bot sedang memulai...');
+            
+            // Periodic connection check untuk Render
+            setInterval(() => {
+                if (!this.client.isConnected && this.connectionStatus === 'connected') {
+                    console.log('Connection lost, attempting reconnect...');
+                    this.connectionStatus = 'disconnected';
+                    this.attemptReconnect();
+                }
+            }, 30000); // Check every 30 seconds
+            
         } catch (error) {
             console.error('Start error:', error.message);
-            process.exit(1);
+            // Jangan exit process di Render, biarkan server tetap berjalan
+            if (!this.isRenderEnvironment) {
+                process.exit(1);
+            }
         }
     }
 }
