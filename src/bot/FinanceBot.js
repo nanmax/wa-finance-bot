@@ -10,8 +10,6 @@ class FinanceBot {
 
     async processMessage(message, author, contactName = null) {
         try {
-            console.log(`🤖 Memproses pesan dari ${author}: ${message}`);
-            
             // Check for report commands first
             const reportResponse = await this.handleReportCommands(message, author);
             if (reportResponse) {
@@ -27,11 +25,6 @@ class FinanceBot {
 
             // Use contact name if available, otherwise use author
             const displayName = contactName || author || 'Unknown';
-            
-            console.log(`👤 Contact Info Debug:`);
-            console.log(`  - Original author: ${author}`);
-            console.log(`  - Contact name: ${contactName}`);
-            console.log(`  - Display name: ${displayName}`);
 
             // Save to database
             const savedRecord = await this.database.saveTransaction({
@@ -47,7 +40,6 @@ class FinanceBot {
             // Generate response message
             const response = await this.generateResponse(analysis, savedRecord || { author: displayName });
             
-            console.log(`✅ Transaksi tersimpan: ${analysis.type} - ${analysis.amount}`);
             return response;
 
         } catch (error) {
@@ -65,11 +57,42 @@ class FinanceBot {
         }
         
         // Detailed report commands
-        if (lowerMessage === 'detail' || lowerMessage === 'detail' || lowerMessage === 'laporan detail') {
+        if (lowerMessage === 'detail' || lowerMessage.includes('detail') || lowerMessage.includes('laporan detail')) {
             return await this.generateDetailedReport();
         }
         
-        // Monthly report commands
+        // Custom month report (format: "juni 2025", "januari 2024", dll)
+        const customMonth = this.parseMonthYear(message);
+        if (customMonth) {
+            return await this.generateCustomMonthReport(customMonth.month, customMonth.year);
+        }
+        
+        // Last month report commands (lebih spesifik, harus diletakkan sebelum 'bulan')
+        if (lowerMessage.includes('bulan kemarin') || lowerMessage.includes('bulan lalu') || lowerMessage.includes('last month')) {
+            return await this.generateLastMonthReport();
+        }
+        
+        // 2 months ago report commands
+        if (lowerMessage.includes('2 bulan') || lowerMessage.includes('dua bulan') || lowerMessage.includes('2 months')) {
+            return await this.generateTwoMonthsAgoReport();
+        }
+        
+        // 3 months ago report commands
+        if (lowerMessage.includes('3 bulan') || lowerMessage.includes('tiga bulan') || lowerMessage.includes('3 months')) {
+            return await this.generateThreeMonthsAgoReport();
+        }
+        
+        // 6 months ago report commands
+        if (lowerMessage.includes('6 bulan') || lowerMessage.includes('enam bulan') || lowerMessage.includes('6 months')) {
+            return await this.generateSixMonthsAgoReport();
+        }
+        
+        // 1 year ago report commands
+        if (lowerMessage.includes('1 tahun') || lowerMessage.includes('satu tahun') || lowerMessage.includes('1 year')) {
+            return await this.generateOneYearAgoReport();
+        }
+        
+        // Monthly report commands (lebih umum, diletakkan setelah yang spesifik)
         if (lowerMessage.includes('bulan') || lowerMessage.includes('monthly') || lowerMessage.includes('laporan bulan')) {
             return await this.generateMonthlyReport();
         }
@@ -268,60 +291,27 @@ class FinanceBot {
     }
 
     async generateMonthlyReport() {
-        try {
-            const now = new Date();
-            // Start of current month (1st day)
-            const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-            // End of current month (last day)
-            const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-            
-            console.log(`📅 Monthly Report Period: ${startOfMonth.toISOString().split('T')[0]} to ${endOfMonth.toISOString().split('T')[0]}`);
-            
-            const report = await this.getDetailByDate(
-                startOfMonth.toISOString().split('T')[0],
-                endOfMonth.toISOString().split('T')[0]
-            );
-            
-            let response = `📅 *LAPORAN BULAN ${startOfMonth.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }).toUpperCase()}*\n\n`;
-            
-            // Summary section
-            response += `📊 *RINGKASAN:*\n`;
-            response += `💰 Total Pemasukan: Rp ${this.formatCurrency(report.summary.totalIncome)}\n`;
-            response += `💸 Total Pengeluaran: Rp ${this.formatCurrency(report.summary.totalExpense)}\n`;
-            response += `💳 Saldo: Rp ${this.formatCurrency(report.summary.totalIncome - report.summary.totalExpense)}\n`;
-            response += `📝 Total Transaksi: ${report.summary.transactionCount}\n\n`;
-            
-            // Check if no transactions this month
-            if (report.summary.transactionCount === 0) {
-                response += `📝 *STATUS:* Belum ada transaksi bulan ini\n\n`;
-                response += `💡 *TIPS:*\n`;
-                response += `• Ketik transaksi keuangan untuk menambah data\n`;
-                response += `• Contoh: "jajan 50000" atau "gaji 5000000"\n`;
-                response += `• Ketik "minggu ini" untuk laporan mingguan\n\n`;
-            }
-            
-            // Top categories
-            if (Object.keys(report.expense.byCategory).length > 0) {
-                response += `🏆 *TOP 3 PENGELUARAN:*\n`;
-                const sortedCategories = Object.keys(report.expense.byCategory)
-                    .map(category => ({ category, ...report.expense.byCategory[category] }))
-                    .sort((a, b) => b.total - a.total)
-                    .slice(0, 3);
-                
-                sortedCategories.forEach((item, index) => {
-                    response += `${index + 1}. ${item.category}: Rp ${this.formatCurrency(item.total)}\n`;
-                });
-                response += `\n`;
-            }
-            
-            response += `📅 *Periode:* ${report.period.startDate} s/d ${report.period.endDate}\n`;
-            response += `💡 *Tips:* Ketik "minggu ini" untuk laporan mingguan`;
-            
-            return response;
-        } catch (error) {
-            console.error('Error generating monthly report:', error);
-            return '❌ Maaf, terjadi kesalahan dalam membuat laporan bulanan.';
-        }
+        return await this.generatePeriodReport('current_month');
+    }
+
+    async generateLastMonthReport() {
+        return await this.generatePeriodReport('last_month');
+    }
+
+    async generateTwoMonthsAgoReport() {
+        return await this.generatePeriodReport('two_months_ago');
+    }
+
+    async generateThreeMonthsAgoReport() {
+        return await this.generatePeriodReport('three_months_ago');
+    }
+
+    async generateSixMonthsAgoReport() {
+        return await this.generatePeriodReport('six_months_ago');
+    }
+
+    async generateOneYearAgoReport() {
+        return await this.generatePeriodReport('one_year_ago');
     }
 
     async generateWeeklyReport() {
@@ -343,6 +333,11 @@ class FinanceBot {
             endOfWeek.setHours(23, 59, 59, 999);
             
             console.log(`📅 Weekly Report Period: ${startOfWeek.toISOString().split('T')[0]} to ${endOfWeek.toISOString().split('T')[0]}`);
+            console.log(`Current date: ${now.toISOString()}`);
+            console.log(`Current day: ${currentDay}`);
+            console.log(`Days to subtract: ${daysToSubtract}`);
+            console.log(`Start of week: ${startOfWeek.toISOString()}`);
+            console.log(`End of week: ${endOfWeek.toISOString()}`);
             
             const report = await this.getDetailByDate(
                 startOfWeek.toISOString().split('T')[0],
@@ -460,6 +455,12 @@ class FinanceBot {
         response += `• "summary" atau "ringkasan" - Ringkasan keuangan\n`;
         response += `• "detail" atau "laporan detail" - Laporan detail lengkap\n`;
         response += `• "bulan ini" atau "laporan bulan" - Laporan bulanan\n`;
+        response += `• "bulan kemarin" atau "bulan lalu" - Laporan bulan kemarin\n`;
+        response += `• "2 bulan" atau "dua bulan" - Laporan 2 bulan yang lalu\n`;
+        response += `• "3 bulan" atau "tiga bulan" - Laporan 3 bulan yang lalu\n`;
+        response += `• "6 bulan" atau "enam bulan" - Laporan 6 bulan yang lalu\n`;
+        response += `• "1 tahun" atau "satu tahun" - Laporan 1 tahun yang lalu\n`;
+        response += `• "juni 2025" atau "januari 2024" - Laporan bulan spesifik\n`;
         response += `• "minggu ini" atau "laporan minggu" - Laporan mingguan\n`;
         response += `• "hari ini" atau "laporan hari ini" - Laporan harian\n\n`;
         response += `👥 *ADMIN GROUP:*\n`;
@@ -484,7 +485,8 @@ class FinanceBot {
         response += `📝 *CARA MENGGUNAKAN:*\n`;
         response += `• Ketik salah satu command di atas untuk mendapatkan laporan\n`;
         response += `• Atau ketik transaksi keuangan seperti biasa\n`;
-        response += `• Contoh: "jajan 50000" atau "gaji 5000000"\n\n`;
+        response += `• Contoh: "jajan 50000" atau "gaji 5000000"\n`;
+        response += `• Untuk laporan bulan spesifik: "juni 2025", "januari 2024"\n\n`;
         response += `💡 *TIPS:*\n`;
         response += `• Gunakan "detail" untuk analisis lengkap\n`;
         response += `• Gunakan "bulan ini" untuk review bulanan\n`;
@@ -505,6 +507,11 @@ class FinanceBot {
         response += `• "summary" - Ringkasan keuangan\n`;
         response += `• "detail" - Laporan detail lengkap\n`;
         response += `• "bulan ini" - Laporan bulanan\n`;
+        response += `• "bulan kemarin" - Laporan bulan kemarin\n`;
+        response += `• "2 bulan" - Laporan 2 bulan yang lalu\n`;
+        response += `• "3 bulan" - Laporan 3 bulan yang lalu\n`;
+        response += `• "6 bulan" - Laporan 6 bulan yang lalu\n`;
+        response += `• "1 tahun" - Laporan 1 tahun yang lalu\n`;
         response += `• "minggu ini" - Laporan mingguan\n`;
         response += `• "hari ini" - Laporan harian\n\n`;
         response += `📝 *CARA MENGGUNAKAN:*\n`;
@@ -1395,6 +1402,242 @@ class FinanceBot {
             return '❌ Maaf, terjadi kesalahan saat mengecek status backup group.';
         }
     }
+
+    async generatePeriodReport(periodType) {
+        try {
+            const now = new Date();
+            let startDate, endDate, periodName;
+            console.log("generatePeriodReport", periodType);
+            console.log("Current date:", now.toISOString());
+            
+            switch (periodType) {
+                case 'current_month':
+                    startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+                    periodName = 'BULAN INI';
+                    break;
+                    
+                case 'last_month':
+                    startDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth(), 0);
+                    periodName = 'BULAN KEMARIN';
+                    break;
+                    
+                case 'two_months_ago':
+                    startDate = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth() - 1, 0);
+                    periodName = '2 BULAN YANG LALU';
+                    break;
+                    
+                case 'three_months_ago':
+                    startDate = new Date(now.getFullYear(), now.getMonth() - 3, 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth() - 2, 0);
+                    periodName = '3 BULAN YANG LALU';
+                    break;
+                    
+                case 'six_months_ago':
+                    startDate = new Date(now.getFullYear(), now.getMonth() - 6, 1);
+                    endDate = new Date(now.getFullYear(), now.getMonth() - 5, 0);
+                    periodName = '6 BULAN YANG LALU';
+                    break;
+                    
+                case 'one_year_ago':
+                    startDate = new Date(now.getFullYear() - 1, now.getMonth(), 1);
+                    endDate = new Date(now.getFullYear() - 1, now.getMonth() + 1, 0);
+                    periodName = '1 TAHUN YANG LALU';
+                    break;
+                    
+                default:
+                    throw new Error('Invalid period type');
+            }
+            
+            // Set time to start and end of day for consistency
+            startDate.setHours(0, 0, 0, 0);
+            endDate.setHours(23, 59, 59, 999);
+            
+            console.log(`Period: ${periodName}`);
+            console.log(`Start date: ${startDate.toISOString()}`);
+            console.log(`End date: ${endDate.toISOString()}`);
+            console.log(`Start date string: ${startDate.toISOString().split('T')[0]}`);
+            console.log(`End date string: ${endDate.toISOString().split('T')[0]}`);
+            
+            const report = await this.getDetailByDate(
+                startDate.toISOString().split('T')[0],
+                endDate.toISOString().split('T')[0]
+            );
+            
+            let response = `📅 *LAPORAN ${periodName}*\n`;
+            response += `📅 *BULAN ${startDate.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' }).toUpperCase()}*\n\n`;
+            
+            // Summary section
+            response += `📊 *RINGKASAN:*\n`;
+            response += `💰 Total Pemasukan: Rp ${this.formatCurrency(report.summary.totalIncome)}\n`;
+            response += `💸 Total Pengeluaran: Rp ${this.formatCurrency(report.summary.totalExpense)}\n`;
+            response += `💳 Saldo: Rp ${this.formatCurrency(report.summary.totalIncome - report.summary.totalExpense)}\n`;
+            response += `📝 Total Transaksi: ${report.summary.transactionCount}\n\n`;
+            
+            // Check if no transactions
+            if (report.summary.transactionCount === 0) {
+                response += `📝 *STATUS:* Belum ada transaksi ${periodName.toLowerCase()}\n\n`;
+                response += `💡 *TIPS:*\n`;
+                response += `• Ketik transaksi keuangan untuk menambah data\n`;
+                response += `• Contoh: "jajan 50000" atau "gaji 5000000"\n`;
+                response += `• Ketik "bulan ini" untuk laporan bulanan\n\n`;
+            }
+            
+            // Top categories
+            if (Object.keys(report.expense.byCategory).length > 0) {
+                response += `🏆 *TOP 3 PENGELUARAN:*\n`;
+                const sortedCategories = Object.keys(report.expense.byCategory)
+                    .map(category => ({ category, ...report.expense.byCategory[category] }))
+                    .sort((a, b) => b.total - a.total)
+                    .slice(0, 3);
+                
+                sortedCategories.forEach((item, index) => {
+                    response += `${index + 1}. ${item.category}: Rp ${this.formatCurrency(item.total)}\n`;
+                });
+                response += `\n`;
+            }
+            
+            response += `📅 *Periode:* ${report.period.startDate} s/d ${report.period.endDate}\n`;
+            response += `💡 *Tips:* Ketik "bulan ini" untuk laporan bulanan`;
+            
+            return response;
+        } catch (error) {
+            console.error(`Error generating ${periodType} report:`, error);
+            return `❌ Maaf, terjadi kesalahan dalam membuat laporan ${periodType}.`;
+        }
+    }
+
+    parseMonthYear(message) {
+        const lowerMessage = message.toLowerCase().trim();
+        
+        // Mapping nama bulan Indonesia ke angka
+        const monthMap = {
+            'januari': 0, 'january': 0,
+            'februari': 1, 'february': 1,
+            'maret': 2, 'march': 2,
+            'april': 3, 'april': 3,
+            'mei': 4, 'may': 4,
+            'juni': 5, 'june': 5,
+            'juli': 6, 'july': 6,
+            'agustus': 7, 'august': 7,
+            'september': 8, 'september': 8,
+            'oktober': 9, 'october': 9,
+            'november': 10, 'november': 10,
+            'desember': 11, 'december': 11
+        };
+        
+        // Regex untuk mencocokkan "bulan tahun" atau "tahun bulan"
+        const patterns = [
+            /(\w+)\s+(\d{4})/, // "juni 2025" atau "june 2025"
+            /(\d{4})\s+(\w+)/, // "2025 juni" atau "2025 june"
+            /(\w+)\s+(\d{2})/, // "juni 25" atau "june 25"
+            /(\d{2})\s+(\w+)/  // "25 juni" atau "25 june"
+        ];
+        
+        for (const pattern of patterns) {
+            const match = lowerMessage.match(pattern);
+            if (match) {
+                const monthName = match[1].toLowerCase();
+                const yearStr = match[2];
+                
+                // Cek apakah match[1] adalah nama bulan
+                if (monthMap[monthName]) {
+                    let year = parseInt(yearStr);
+                    
+                    // Jika tahun 2 digit, konversi ke 4 digit
+                    if (year < 100) {
+                        year += 2000;
+                    }
+                    
+                    return {
+                        month: monthMap[monthName],
+                        year: year,
+                        monthName: monthName
+                    };
+                }
+                
+                // Cek apakah match[2] adalah nama bulan (untuk format "2025 juni")
+                const monthName2 = match[2].toLowerCase();
+                if (monthMap[monthName2]) {
+                    let year = parseInt(match[1]);
+                    
+                    // Jika tahun 2 digit, konversi ke 4 digit
+                    if (year < 100) {
+                        year += 2000;
+                    }
+                    
+                    return {
+                        month: monthMap[monthName2],
+                        year: year,
+                        monthName: monthName2
+                    };
+                }
+            }
+        }
+        
+        return null;
+    }
+
+    async generateCustomMonthReport(month, year) {
+        try {
+            // Start of specified month (1st day)
+            const startDate = new Date(year, month, 1);
+            // End of specified month (last day)
+            const endDate = new Date(year, month + 1, 0);
+            
+            const report = await this.getDetailByDate(
+                startDate.toISOString().split('T')[0],
+                endDate.toISOString().split('T')[0]
+            );
+            
+            const monthNames = [
+                'Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni',
+                'Juli', 'Agustus', 'September', 'Oktober', 'November', 'Desember'
+            ];
+            
+            let response = `📅 *LAPORAN BULAN ${monthNames[month].toUpperCase()} ${year}*\n\n`;
+            
+            // Summary section
+            response += `📊 *RINGKASAN:*\n`;
+            response += `💰 Total Pemasukan: Rp ${this.formatCurrency(report.summary.totalIncome)}\n`;
+            response += `💸 Total Pengeluaran: Rp ${this.formatCurrency(report.summary.totalExpense)}\n`;
+            response += `💳 Saldo: Rp ${this.formatCurrency(report.summary.totalIncome - report.summary.totalExpense)}\n`;
+            response += `📝 Total Transaksi: ${report.summary.transactionCount}\n\n`;
+            
+            // Check if no transactions
+            if (report.summary.transactionCount === 0) {
+                response += `📝 *STATUS:* Belum ada transaksi bulan ${monthNames[month]} ${year}\n\n`;
+                response += `💡 *TIPS:*\n`;
+                response += `• Ketik transaksi keuangan untuk menambah data\n`;
+                response += `• Contoh: "jajan 50000" atau "gaji 5000000"\n`;
+                response += `• Ketik "bulan ini" untuk laporan bulanan\n\n`;
+            }
+            
+            // Top categories
+            if (Object.keys(report.expense.byCategory).length > 0) {
+                response += `🏆 *TOP 3 PENGELUARAN:*\n`;
+                const sortedCategories = Object.keys(report.expense.byCategory)
+                    .map(category => ({ category, ...report.expense.byCategory[category] }))
+                    .sort((a, b) => b.total - a.total)
+                    .slice(0, 3);
+                
+                sortedCategories.forEach((item, index) => {
+                    response += `${index + 1}. ${item.category}: Rp ${this.formatCurrency(item.total)}\n`;
+                });
+                response += `\n`;
+            }
+            
+            response += `📅 *Periode:* ${report.period.startDate} s/d ${report.period.endDate}\n`;
+            response += `💡 *Tips:* Ketik "bulan ini" untuk laporan bulanan`;
+            
+            return response;
+        } catch (error) {
+            console.error(`Error generating custom month report:`, error);
+            return `❌ Maaf, terjadi kesalahan dalam membuat laporan bulan ${month} ${year}.`;
+        }
+    }
 }
 
-module.exports = FinanceBot; 
+module.exports = FinanceBot;

@@ -8,6 +8,7 @@ const Database = require('./database/Database');
 const FinanceBot = require('./bot/FinanceBot');
 const AIService = require('./services/AIService');
 const BackupService = require('./services/BackupService');
+const ScheduledBackupService = require('./services/ScheduledBackupService');
 const fs = require('fs');
 const path = require('path');
 
@@ -15,6 +16,8 @@ dotenv.config();
 
 class WhatsAppFinanceRenderServer {
     constructor() {
+        this.configPath = path.join(__dirname, '..', 'config.json');
+        this.loadConfig();
         this.setupAPIServer();
         this.setupDatabase();
         this.setupAIService();
@@ -43,6 +46,92 @@ class WhatsAppFinanceRenderServer {
                 this.maxReconnectAttempts = 5; // Kurangi percobaan untuk menghemat resource
             }
         }
+    }
+
+    loadConfig() {
+        try {
+            if (fs.existsSync(this.configPath)) {
+                this.config = JSON.parse(fs.readFileSync(this.configPath, 'utf8'));
+                // Ensure allowedGroups array exists
+                if (!this.config.allowedGroups) {
+                    this.config.allowedGroups = [];
+                }
+            } else {
+                this.config = {
+                    allowedGroupId: null,
+                    botName: "FinanceBot",
+                    logLevel: "info",
+                    allowedGroups: [] // Array untuk menyimpan group yang diizinkan
+                };
+                this.saveConfig();
+            }
+        } catch (error) {
+            console.error('Error loading config:', error);
+            this.config = {
+                allowedGroupId: null,
+                botName: "FinanceBot",
+                logLevel: "info",
+                allowedGroups: []
+            };
+        }
+    }
+
+    saveConfig() {
+        try {
+            fs.writeFileSync(this.configPath, JSON.stringify(this.config, null, 2));
+        } catch (error) {
+            console.error('Error saving config:', error);
+        }
+    }
+
+    // Check if a group is allowed
+    isGroupAllowed(groupId) {
+        // Check if group is in allowed groups list
+        if (this.config.allowedGroups && this.config.allowedGroups.includes(groupId)) {
+            return true;
+        }
+        
+        // Check legacy allowedGroupId
+        if (this.config.allowedGroupId && groupId === this.config.allowedGroupId) {
+            return true;
+        }
+        
+        return false;
+    }
+
+    // Add group to allowed list
+    addAllowedGroup(groupId) {
+        if (!this.config.allowedGroups) {
+            this.config.allowedGroups = [];
+        }
+        
+        if (!this.config.allowedGroups.includes(groupId)) {
+            this.config.allowedGroups.push(groupId);
+            this.saveConfig();
+            console.log(`✅ Group ${groupId} berhasil ditambahkan ke daftar yang diizinkan`);
+            return true;
+        } else {
+            console.log(`⚠️ Group ${groupId} sudah ada di daftar yang diizinkan`);
+            return false;
+        }
+    }
+
+    // Remove group from allowed list
+    removeAllowedGroup(groupId) {
+        if (this.config.allowedGroups && this.config.allowedGroups.includes(groupId)) {
+            this.config.allowedGroups = this.config.allowedGroups.filter(id => id !== groupId);
+            this.saveConfig();
+            console.log(`✅ Group ${groupId} berhasil dihapus dari daftar yang diizinkan`);
+            return true;
+        } else {
+            console.log(`⚠️ Group ${groupId} tidak ditemukan di daftar yang diizinkan`);
+            return false;
+        }
+    }
+
+    // Get all allowed groups
+    getAllowedGroups() {
+        return this.config.allowedGroups || [];
     }
 
     checkEnvironment() {
@@ -223,7 +312,8 @@ class WhatsAppFinanceRenderServer {
 
     setupFinanceBot() {
         this.backupService = new BackupService(this.db);
-        this.financeBot = new FinanceBot(this.db, this.aiService, this.backupService, null);
+        this.scheduledBackupService = new ScheduledBackupService(this.backupService, this.client);
+        this.financeBot = new FinanceBot(this.db, this.aiService, this.backupService, this.scheduledBackupService);
     }
 
     async safeSendMessage(message, text) {
@@ -253,6 +343,110 @@ class WhatsAppFinanceRenderServer {
             console.error('❌ Failed to send message:', error.message);
             return false;
         }
+    }
+
+    async handleFileUpload(message) {
+        try {
+            console.log('📁 File upload detected, checking for backup file...');
+            
+            // Check if file is a zip file
+            const fileName = message.body || 'unknown';
+            if (!fileName.toLowerCase().endsWith('.zip')) {
+                await message.reply('❌ *FILE TIDAK VALID*\n\nFile harus berformat .zip (backup file)\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip');
+                return;
+            }
+
+            // Download the file
+            const media = await message.downloadMedia();
+            if (!media) {
+                await message.reply('❌ *DOWNLOAD GAGAL*\n\nTidak bisa mengunduh file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
+                return;
+            }
+
+            // Save file temporarily
+            const tempDir = path.join(__dirname, '..', '..', 'temp');
+            if (!fs.existsSync(tempDir)) {
+                fs.mkdirSync(tempDir, { recursive: true });
+            }
+
+            const filePath = path.join(tempDir, fileName);
+            const buffer = Buffer.from(media.data, 'base64');
+            fs.writeFileSync(filePath, buffer);
+
+            console.log(`📁 File saved: ${filePath}`);
+
+            // Validate backup file
+            const validation = await this.backupService.validateBackupFile(filePath);
+            if (!validation.valid) {
+                fs.unlinkSync(filePath); // Clean up
+                await message.reply(`❌ *BACKUP FILE TIDAK VALID*\n\nError: ${validation.error}\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip`);
+                return;
+            }
+
+            // Confirm restore
+            let confirmMessage = `✅ *BACKUP FILE VALID*\n\n`;
+            confirmMessage += `📦 *File:* ${fileName}\n`;
+            confirmMessage += `📅 *Backup Date:* ${new Date(validation.timestamp).toLocaleString('id-ID')}\n`;
+            confirmMessage += `📊 *Data:* ${validation.transactionCount} transaksi\n\n`;
+            confirmMessage += `⚠️ *PERINGATAN:*\n`;
+            confirmMessage += `• Data saat ini akan dihapus\n`;
+            confirmMessage += `• Proses tidak dapat dibatalkan\n`;
+            confirmMessage += `• Pastikan ini adalah backup yang benar\n\n`;
+            confirmMessage += `🔄 *Untuk melanjutkan restore:*\n`;
+            confirmMessage += `• Ketik "restore confirm" untuk melanjutkan\n`;
+            confirmMessage += `• Atau ketik "restore cancel" untuk membatalkan`;
+
+            await message.reply(confirmMessage);
+
+            // Store file path for confirmation
+            this.pendingRestoreFile = filePath;
+            this.pendingRestoreMetadata = validation;
+
+        } catch (error) {
+            console.error('❌ Error handling file upload:', error);
+            await message.reply('❌ *ERROR*\n\nTerjadi kesalahan saat memproses file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
+        }
+    }
+
+    async sendBackupFile(message, filePath) {
+        try {
+            console.log(`📤 Sending backup file: ${filePath}`);
+            
+            // Check if file exists on disk
+            if (!fs.existsSync(filePath)) {
+                console.log(`❌ Backup file not found on disk: ${filePath}`);
+                await message.reply('❌ *ERROR*\n\nFile backup tidak ditemukan di server\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
+                return;
+            }
+            
+            // Get file info
+            const fileName = path.basename(filePath);
+            const stats = fs.statSync(filePath);
+            const fileSize = this.formatFileSize(stats.size);
+            const createdDate = new Date(stats.birthtime).toLocaleString('id-ID');
+            
+            // Send file via WhatsApp
+            const { MessageMedia } = require('whatsapp-web.js');
+            const media = MessageMedia.fromFilePath(filePath);
+            
+            await message.reply(media, {
+                caption: `📦 *BACKUP FILE*\n\n📦 File: ${fileName}\n📅 Created: ${createdDate}\n📏 Size: ${fileSize}\n\n💡 *Tips:*\n• Simpan file untuk restore nanti\n• File berformat .zip\n• Upload file ini untuk restore`
+            });
+            
+            console.log(`✅ Backup file sent: ${fileName}`);
+            
+        } catch (error) {
+            console.error('❌ Error sending backup file:', error);
+            await message.reply('❌ *ERROR*\n\nTerjadi kesalahan saat mengirim file backup\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
+        }
+    }
+
+    formatFileSize(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
 
@@ -320,6 +514,39 @@ class WhatsAppFinanceRenderServer {
                 author: message.author,
                 body: message.body
             });
+            
+            // BLOCK group management commands dari semua sumber kecuali dari diri sendiri
+            const isGroupManagementCommand = message.body.toLowerCase().startsWith('add group ') || 
+                message.body.toLowerCase().startsWith('remove group ') ||
+                message.body.toLowerCase() === 'list groups' ||
+                message.body.toLowerCase() === 'clear groups';
+            
+            if (isGroupManagementCommand) {
+                console.log(`🔍 Group Management Command Detected: ${message.body}`);
+                console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+                
+                // Hanya izinkan jika fromMe = true dan author adalah diri sendiri
+                if (!message.fromMe) {
+                    console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
+                    console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+                    await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+                    return;
+                }
+                
+                // Pastikan author adalah diri sendiri (format: 62895364680590:15@c.us)
+                const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
+                const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
+                
+                if (authorBase !== fromBase) {
+                    console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
+                    console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+                    console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
+                    await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+                    return;
+                }
+            }
+            
+            // Debug message data for contact name
             if (message._data) {
                 console.log("📱 Message _data:", {
                     notifyName: message._data.notifyName,
@@ -330,23 +557,131 @@ class WhatsAppFinanceRenderServer {
 
             // Handle file upload for restore
             if (message.hasMedia && (message.type === 'document' || message.type === 'application/zip')) {
-                if (typeof this.handleFileUpload === 'function') {
                     return await this.handleFileUpload(message);
+                }
+
+                        // Handle self messages for group management (HANYA dari diri sendiri)
+            if (message.fromMe) {
+                // Pastikan author adalah diri sendiri (format: 62895364680590:15@c.us)
+                const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
+                const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
+                
+                if (authorBase === fromBase) {
+                    console.log(`🔐 Pesan dari diri sendiri: ${message.body}`);
+                    console.log(`🔒 Group Management - Hanya diri sendiri yang diizinkan`);
+                    console.log(`🔍 Validasi: fromMe=${message.fromMe}, from=${message.from}, author=${message.author}`);
+                    console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
+                    
+                    // Handle group management commands
+                    if (message.body.toLowerCase().startsWith('add group ')) {
+                    const groupId = message.body.substring(10).trim();
+                    if (groupId && groupId.includes('@g.us')) {
+                        const success = this.addAllowedGroup(groupId);
+                        const response = success ? 
+                            `✅ Group ${groupId} berhasil ditambahkan ke daftar yang diizinkan` :
+                            `⚠️ Group ${groupId} sudah ada di daftar yang diizinkan`;
+                        await message.reply(response);
+                        return;
+                    } else {
+                        await message.reply('❌ Format salah. Gunakan: add group [GROUP_ID]\nContoh: add group 1234567890@g.us');
+                        return;
+                    }
+                }
+                
+                    if (message.body.toLowerCase().startsWith('remove group ')) {
+                        const groupId = message.body.substring(13).trim();
+                        if (groupId && groupId.includes('@g.us')) {
+                            const success = this.removeAllowedGroup(groupId);
+                            const response = success ? 
+                                `✅ Group ${groupId} berhasil dihapus dari daftar yang diizinkan` :
+                                `⚠️ Group ${groupId} tidak ditemukan di daftar yang diizinkan`;
+                            await message.reply(response);
+                            return;
+                        } else {
+                            await message.reply('❌ Format salah. Gunakan: remove group [GROUP_ID]\nContoh: remove group 1234567890@g.us');
+                            return;
+                        }
+                    }
+                    
+                    if (message.body.toLowerCase() === 'list groups') {
+                        const allowedGroups = this.getAllowedGroups();
+                        if (allowedGroups.length === 0) {
+                            await message.reply('📋 Daftar group yang diizinkan kosong');
+                        } else {
+                            const groupList = allowedGroups.map((groupId, index) => `${index + 1}. ${groupId}`).join('\n');
+                            await message.reply(`📋 Daftar group yang diizinkan:\n${groupList}`);
+                        }
+                        return;
+                    }
+                    
+                    if (message.body.toLowerCase() === 'clear groups') {
+                        this.config.allowedGroups = [];
+                        this.saveConfig();
+                        await message.reply('🗑️ Semua group telah dihapus dari daftar yang diizinkan');
+                        return;
+                    }
+                    
+                                         // Handle other self messages (non-group management)
+                     let contactName = message.author;
+                     try {
+                         if (message._data && message._data.notifyName) {
+                             contactName = message._data.notifyName;
+                         } else {
+                             const contact = await message.getContact();
+                             if (contact && contact.pushname) {
+                                 contactName = contact.pushname;
+                             } else if (contact && contact.name) {
+                                 contactName = contact.name;
+                             } else {
+                                 contactName = message.author.split('@')[0];
+                             }
+                         }
+                     } catch (error) {
+                         contactName = message.author.split('@')[0];
+                     }
+
+                     const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                
+                if (result) {
+                    // Check if this is a send backup file request
+                    if (result.includes('SEND BACKUP FILE') && result.includes('File sedang dikirim')) {
+                        // Extract file path from result
+                        const filePathMatch = result.match(/📁 \*Path:\* (.+)/);
+                        if (filePathMatch) {
+                            const filePath = filePathMatch[1];
+                            await this.sendBackupFile(message, filePath);
+                        }
+                    }
+                    
+                    // Send response back to the same chat
+                    await message.reply(result);
+                        console.log(`✅ Response terkirim ke chat: ${result}`);
                 }
             }
 
             // Handle group messages (from other people)
-            if (message.from.endsWith('@g.us') && !message.fromMe) {
-                const allowedGroups = this.groupConfig && this.groupConfig.groups ? this.groupConfig.groups.map(g => g.id) : [];
-                const defaultGroup = this.groupConfig && this.groupConfig.defaultGroup;
-                const isGroupAllowed = allowedGroups.includes(message.from) || (defaultGroup && message.from === defaultGroup);
+            if (message.from.endsWith('@g.us')) {
+                console.log(`📨 Pesan dari group: ${message.body}`);
+                console.log(`👤 Pengirim: ${message.author || 'Unknown'}`);
+                console.log(`🏷️ Group ID: ${message.from}`);
+                console.log(`🔍 FromMe: ${message.fromMe}, Author: ${message.author}`);
+                
+                // Check if this group is registered/allowed
+                const isGroupAllowed = this.isGroupAllowed(message.from);
+                
+                console.log(`📋 Group Check (dev):`);
+                console.log(`  - Message from: ${message.from}`);
+                console.log(`  - Allowed groups: ${JSON.stringify(this.config.allowedGroups || [])}`);
+                console.log(`  - Legacy allowedGroupId: ${this.config.allowedGroupId}`);
+                console.log(`  - Is allowed: ${isGroupAllowed}`);
+                
                 if (!isGroupAllowed) {
-                    console.log(`⚠️ Group ${message.from} tidak terdaftar, diabaikan`);
-                    console.log(`💡 Daftar group yang diizinkan: ${JSON.stringify(allowedGroups)}`);
+                    console.log(`❌ Group ${message.from} tidak terdaftar, diabaikan`);
+                    console.log(`💡 Daftar group yang diizinkan: ${JSON.stringify(this.config.allowedGroups || [])}`);
                     return;
                 }
+                
                 console.log(`✅ Group ${message.from} terdaftar, memproses pesan...`);
-
                 let contactName = message.author;
                 try {
                     if (message._data && message._data.notifyName) {
@@ -356,62 +691,46 @@ class WhatsAppFinanceRenderServer {
                         const contact = await message.getContact();
                         if (contact && contact.pushname) {
                             contactName = contact.pushname;
-                            console.log(`✅ Menggunakan pushname: ${contactName}`);
                         } else if (contact && contact.name) {
                             contactName = contact.name;
-                            console.log(`✅ Menggunakan contact.name: ${contactName}`);
                         } else {
                             contactName = message.author.split('@')[0];
-                            console.log(`⚠️ Menggunakan formatted phone: ${contactName}`);
                         }
                     }
                 } catch (error) {
-                    console.log('⚠️ Tidak bisa mendapatkan nama kontak, menggunakan formatted author');
                     contactName = message.author.split('@')[0];
                 }
 
                 const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                
                 if (result) {
+                    // Check if this is a download backup request
+                    if (result.includes('DOWNLOAD BACKUP') && result.includes('File sedang dikirim')) {
+                        // Extract file path from result
+                        const filePathMatch = result.match(/🔧 \*File Info:\* (.+)/);
+                        if (filePathMatch) {
+                            const filePath = filePathMatch[1];
+                            await this.sendBackupFile(message, filePath);
+                        }
+                    }
+                    
+                    // Check if this is a send backup file request
+                    if (result.includes('SEND BACKUP FILE') && result.includes('File sedang dikirim')) {
+                        // Extract file path from result
+                        const filePathMatch = result.match(/📁 \*Path:\* (.+)/);
+                        if (filePathMatch) {
+                            const filePath = filePathMatch[1];
+                            await this.sendBackupFile(message, filePath);
+                        }
+                    }
+                    
+                    // Send response back to group
                     await message.reply(result);
                     console.log(`✅ Response terkirim: ${result}`);
                 }
             }
-            // Handle self messages to registered groups (chat via pribadi)
-            else if (message.fromMe && message.from.endsWith('@c.us') && message.author) {
-                let contactName = message.author;
-                try {
-                    if (message._data && message._data.notifyName) {
-                        contactName = message._data.notifyName;
-                        console.log(`✅ Self message - Menggunakan notifyName: ${contactName}`);
-                    } else {
-                        const contact = await message.getContact();
-                        if (contact && contact.pushname) {
-                            contactName = contact.pushname;
-                            console.log(`✅ Self message - Menggunakan pushname: ${contactName}`);
-                        } else if (contact && contact.name) {
-                            contactName = contact.name;
-                            console.log(`✅ Self message - Menggunakan contact.name: ${contactName}`);
-                        } else {
-                            contactName = message.author.split('@')[0];
-                            console.log(`⚠️ Self message - Menggunakan formatted phone: ${contactName}`);
-                        }
-                    }
-                } catch (error) {
-                    console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan formatted author');
-                    contactName = message.author.split('@')[0];
-                }
-                const result = await this.financeBot.processMessage(message.body, message.author, contactName);
-                if (result) {
-                    await message.reply(result);
-                    console.log(`✅ Response terkirim ke chat: ${result}`);
-                }
-            }
-            // Ignore all other messages
-            else {
-                console.log(`🚫 Pesan diabaikan: ${message.body}`);
-                console.log(`📱 Jenis: ${message.fromMe ? 'Self' : 'Other'} - ${message.from.endsWith('@g.us') ? 'Group' : 'Private'}`);
-            }
-        };
+        }
+    };
 
         // Event handler panggil fungsi yang sama
         this.client.on('message', this.handleWhatsAppMessage);
@@ -726,8 +1045,196 @@ class WhatsAppFinanceRenderServer {
             }
         });
 
-        // Group management endpoints
-        this.app.get('/api/groups', (req, res) => {
+        // Get all transactions
+        this.app.get('/api/transactions', async (req, res) => {
+            try {
+                const limit = parseInt(req.query.limit) || 100;
+                const transactions = await this.db.getTransactions(limit);
+                res.json(transactions);
+            } catch (error) {
+                console.error('Error getting transactions:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get WhatsApp groups
+        this.app.get('/api/groups', async (req, res) => {
+            try {
+                const chats = await this.client.getChats();
+                const groups = chats.filter(chat => chat.isGroup).map(group => ({
+                    id: group.id._serialized,
+                    name: group.name,
+                    participants: group.participants.length,
+                    isGroup: group.isGroup,
+                    isAllowed: this.isGroupAllowed(group.id._serialized)
+                }));
+                
+                res.json({
+                    groups: groups,
+                    total: groups.length,
+                    allowedGroups: this.getAllowedGroups(),
+                    message: 'Gunakan Group ID untuk menambahkan ke daftar yang diizinkan (HANYA via pesan dari diri sendiri)'
+                });
+            } catch (error) {
+                console.error('Error getting groups:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get allowed groups
+        this.app.get('/api/allowed-groups', (req, res) => {
+            try {
+                res.json({
+                    allowedGroups: this.getAllowedGroups(),
+                    total: this.getAllowedGroups().length,
+                    note: 'Group hanya bisa ditambahkan via pesan dari diri sendiri'
+                });
+            } catch (error) {
+                console.error('Error getting allowed groups:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Add group to allowed list
+        this.app.post('/api/allowed-groups', async (req, res) => {
+            try {
+                const { groupId } = req.body;
+                
+                if (!groupId) {
+                    return res.status(400).json({ error: 'groupId is required' });
+                }
+                
+                const success = this.addAllowedGroup(groupId);
+                
+                res.json({ 
+                    success: success,
+                    message: success ? 'Group berhasil ditambahkan' : 'Group sudah ada di daftar',
+                    allowedGroups: this.getAllowedGroups()
+                });
+            } catch (error) {
+                console.error('Error adding allowed group:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Remove group from allowed list
+        this.app.delete('/api/allowed-groups/:groupId', async (req, res) => {
+            try {
+                const { groupId } = req.params;
+                
+                if (!groupId) {
+                    return res.status(400).json({ error: 'groupId is required' });
+                }
+                
+                const success = this.removeAllowedGroup(groupId);
+                
+                res.json({ 
+                    success: success,
+                    message: success ? 'Group berhasil dihapus' : 'Group tidak ditemukan',
+                    allowedGroups: this.getAllowedGroups()
+                });
+            } catch (error) {
+                console.error('Error removing allowed group:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+
+
+        // Get current group configuration
+        this.app.get('/api/config', (req, res) => {
+            const config = {
+                whatsappGroupId: process.env.WHATSAPP_GROUP_ID || 'Not configured',
+                botName: process.env.BOT_NAME || 'FinanceBot',
+                port: process.env.PORT || 3000,
+                allowedGroups: this.getAllowedGroups(),
+                securityNote: 'Group hanya bisa ditambahkan via pesan dari diri sendiri'
+            };
+            res.json(config);
+        });
+
+        // Set allowed group for bot processing
+        this.app.post('/api/set-allowed-group', async (req, res) => {
+            try {
+                const { groupId } = req.body;
+                
+                if (!groupId) {
+                    return res.status(400).json({ error: 'groupId is required' });
+                }
+                
+                // Verify group exists
+                const chats = await this.client.getChats();
+                const group = chats.find(chat => chat.id._serialized === groupId && chat.isGroup);
+                
+                if (!group) {
+                    return res.status(404).json({ error: 'Group not found' });
+                }
+                
+                // Update configuration
+                this.config.allowedGroupId = groupId;
+                this.saveConfig();
+                
+                res.json({ 
+                    message: 'Allowed group updated successfully',
+                    groupId: groupId,
+                    groupName: group.name,
+                    note: 'Changes applied immediately'
+                });
+            } catch (error) {
+                console.error('Error setting allowed group:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get current allowed group
+        this.app.get('/api/allowed-group', async (req, res) => {
+            try {
+                const groupId = this.config.allowedGroupId || process.env.WHATSAPP_GROUP_ID;
+                
+                if (!groupId) {
+                    return res.json({ 
+                        message: 'No group configured - bot will only process allowed groups',
+                        groupId: null,
+                        groupName: null,
+                        allowedGroups: this.getAllowedGroups()
+                    });
+                }
+                
+                // Get group details
+                const chats = await this.client.getChats();
+                const group = chats.find(chat => chat.id._serialized === groupId);
+                
+                res.json({
+                    groupId: groupId,
+                    groupName: group ? group.name : 'Unknown',
+                    isConfigured: true,
+                    allowedGroups: this.getAllowedGroups(),
+                    securityNote: 'Group hanya bisa ditambahkan via pesan dari diri sendiri'
+                });
+            } catch (error) {
+                console.error('Error getting allowed group:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Clear allowed group (process only allowed groups)
+        this.app.delete('/api/allowed-group', async (req, res) => {
+            try {
+                this.config.allowedGroupId = null;
+                this.saveConfig();
+                
+                res.json({ 
+                    message: 'Allowed group cleared - bot will only process allowed groups',
+                    allowedGroups: this.getAllowedGroups()
+                });
+            } catch (error) {
+                console.error('Error clearing allowed group:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Group management endpoints (legacy)
+        this.app.get('/api/legacy-groups', (req, res) => {
             res.json({
                 groups: this.groupConfig.groups,
                 defaultGroup: this.groupConfig.defaultGroup,
@@ -820,7 +1327,14 @@ class WhatsAppFinanceRenderServer {
                 },
                 groups: {
                     total: this.groupConfig.groups.length,
-                    default: this.groupConfig.defaultGroup
+                    default: this.groupConfig.defaultGroup,
+                    allowedGroups: this.getAllowedGroups(),
+                    securityNote: 'Group hanya bisa ditambahkan via pesan dari diri sendiri'
+                },
+                config: {
+                    botName: this.config.botName,
+                    logLevel: this.config.logLevel,
+                    allowedGroupId: this.config.allowedGroupId
                 },
                 memory: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024 * 100) / 100} MB`,
                 uptime: `${Math.round(process.uptime())} seconds`
@@ -841,6 +1355,258 @@ class WhatsAppFinanceRenderServer {
         // Group manager interface
         this.app.get('/groups', (req, res) => {
             res.sendFile(path.join(__dirname, '../public/group-manager.html'));
+        });
+
+        // Send message to WhatsApp group (for testing)
+        this.app.post('/api/send-message', async (req, res) => {
+            try {
+                const { message, groupId } = req.body;
+                
+                if (!message) {
+                    return res.status(400).json({ error: 'message is required' });
+                }
+                
+                // Find group by ID or use first available group
+                const chats = await this.client.getChats();
+                const group = groupId ? 
+                    chats.find(chat => chat.id._serialized === groupId) :
+                    chats.find(chat => chat.isGroup);
+                
+                if (!group) {
+                    return res.status(404).json({ error: 'Group not found' });
+                }
+                
+                await group.sendMessage(message);
+                res.json({ message: 'Message sent successfully', group: group.name });
+            } catch (error) {
+                console.error('Error sending message:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Manual transaction entry
+        this.app.post('/api/transactions', async (req, res) => {
+            try {
+                const { type, amount, description, category, author } = req.body;
+                
+                if (!type || !amount || !description || !category) {
+                    return res.status(400).json({ 
+                        error: 'type, amount, description, and category are required' 
+                    });
+                }
+                
+                if (!['income', 'expense'].includes(type)) {
+                    return res.status(400).json({ error: 'type must be income or expense' });
+                }
+                
+                const transaction = await this.db.saveTransaction({
+                    type,
+                    amount: parseFloat(amount),
+                    description,
+                    category,
+                    author: author || 'Manual Entry',
+                    original_message: `Manual entry: ${description}`
+                });
+                
+                res.status(201).json(transaction);
+            } catch (error) {
+                console.error('Error creating transaction:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get financial summary
+        this.app.get('/api/summary', async (req, res) => {
+            try {
+                const summary = await this.db.getSummary();
+                res.json(summary);
+            } catch (error) {
+                console.error('Error getting summary:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Get summary by date range
+        this.app.get('/api/summary/date-range', async (req, res) => {
+            try {
+                const { startDate, endDate } = req.query;
+                
+                if (!startDate || !endDate) {
+                    return res.status(400).json({ 
+                        error: 'startDate and endDate are required',
+                        example: {
+                            startDate: '2024-01-01',
+                            endDate: '2024-01-31'
+                        }
+                    });
+                }
+
+                const summary = await this.financeBot.getSummaryByDate(startDate, endDate);
+                
+                res.json({
+                    success: true,
+                    data: {
+                        period: {
+                            startDate: summary.startDate,
+                            endDate: summary.endDate,
+                            totalDays: Math.ceil((new Date(endDate) - new Date(startDate)) / (1000 * 60 * 60 * 24)) + 1
+                        },
+                        summary: {
+                            totalIncome: summary.totalIncome,
+                            totalExpense: summary.totalExpense,
+                            balance: summary.balance,
+                            transactionCount: summary.transactionCount
+                        },
+                        formatted: {
+                            totalIncome: this.financeBot.formatCurrency(summary.totalIncome),
+                            totalExpense: this.financeBot.formatCurrency(summary.totalExpense),
+                            balance: this.financeBot.formatCurrency(summary.balance)
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error getting summary by date:', error);
+                res.status(500).json({ error: 'Failed to get summary by date' });
+            }
+        });
+
+        // Get detailed report by date range
+        this.app.get('/api/report', async (req, res) => {
+            try {
+                const { startDate, endDate } = req.query;
+                
+                if (!startDate || !endDate) {
+                    return res.status(400).json({ 
+                        error: 'startDate and endDate are required',
+                        example: {
+                            startDate: '2024-01-01',
+                            endDate: '2024-01-31'
+                        }
+                    });
+                }
+
+                const report = await this.financeBot.getDetailByDate(startDate, endDate);
+                
+                res.json({
+                    success: true,
+                    data: {
+                        period: report.period,
+                        summary: {
+                            ...report.summary,
+                            balance: report.summary.totalIncome - report.summary.totalExpense
+                        },
+                        income: {
+                            total: report.income.transactions.reduce((sum, t) => sum + t.amount, 0),
+                            count: report.income.transactions.length,
+                            byCategory: Object.keys(report.income.byCategory).map(category => ({
+                                category,
+                                total: report.income.byCategory[category].total,
+                                count: report.income.byCategory[category].count,
+                                formattedTotal: this.financeBot.formatCurrency(report.income.byCategory[category].total)
+                            })),
+                            transactions: report.income.transactions.map(t => ({
+                                ...t,
+                                formattedAmount: this.financeBot.formatCurrency(t.amount),
+                                formattedDate: new Date(t.timestamp).toLocaleDateString('id-ID')
+                            }))
+                        },
+                        expense: {
+                            total: report.expense.transactions.reduce((sum, t) => sum + t.amount, 0),
+                            count: report.expense.transactions.length,
+                            byCategory: Object.keys(report.expense.byCategory).map(category => ({
+                                category,
+                                total: report.expense.byCategory[category].total,
+                                count: report.expense.byCategory[category].count,
+                                formattedTotal: this.financeBot.formatCurrency(report.expense.byCategory[category].total)
+                            })),
+                            transactions: report.expense.transactions.map(t => ({
+                                ...t,
+                                formattedAmount: this.financeBot.formatCurrency(t.amount),
+                                formattedDate: new Date(t.timestamp).toLocaleDateString('id-ID')
+                            }))
+                        },
+                        formatted: {
+                            totalIncome: this.financeBot.formatCurrency(report.summary.totalIncome),
+                            totalExpense: this.financeBot.formatCurrency(report.summary.totalExpense),
+                            balance: this.financeBot.formatCurrency(report.summary.totalIncome - report.summary.totalExpense)
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error getting detailed report:', error);
+                res.status(500).json({ error: 'Failed to get detailed report' });
+            }
+        });
+
+        // Backup and restore endpoints
+        this.app.post('/api/backup', async (req, res) => {
+            try {
+                const backupResult = await this.backupService.createBackup();
+                res.json({
+                    success: true,
+                    message: 'Backup created successfully',
+                    filePath: backupResult.filePath,
+                    fileName: backupResult.fileName,
+                    timestamp: backupResult.timestamp
+                });
+            } catch (error) {
+                console.error('Error creating backup:', error);
+                res.status(500).json({ error: 'Failed to create backup' });
+            }
+        });
+
+        this.app.post('/api/restore', async (req, res) => {
+            try {
+                const { filePath } = req.body;
+                
+                if (!filePath) {
+                    return res.status(400).json({ error: 'filePath is required' });
+                }
+                
+                const restoreResult = await this.backupService.restoreBackup(filePath);
+                res.json({
+                    success: true,
+                    message: 'Backup restored successfully',
+                    restoredTransactions: restoreResult.restoredTransactions
+                });
+            } catch (error) {
+                console.error('Error restoring backup:', error);
+                res.status(500).json({ error: 'Failed to restore backup' });
+            }
+        });
+
+        // Get transactions by date range
+        this.app.get('/api/transactions/date-range', async (req, res) => {
+            try {
+                const { startDate, endDate } = req.query;
+                
+                if (!startDate || !endDate) {
+                    return res.status(400).json({ error: 'startDate and endDate are required' });
+                }
+                
+                const transactions = await this.db.getTransactionsByDateRange(startDate, endDate);
+                res.json(transactions);
+            } catch (error) {
+                console.error('Error getting transactions by date range:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
+        });
+
+        // Delete transaction
+        this.app.delete('/api/transactions/:id', async (req, res) => {
+            try {
+                const id = parseInt(req.params.id);
+                const deleted = await this.db.deleteTransaction(id);
+                
+                if (!deleted) {
+                    return res.status(404).json({ error: 'Transaction not found' });
+                }
+                
+                res.json({ message: 'Transaction deleted successfully' });
+            } catch (error) {
+                console.error('Error deleting transaction:', error);
+                res.status(500).json({ error: 'Internal server error' });
+            }
         });
 
         this.app.use('*', (req, res) => {
@@ -864,6 +1630,12 @@ class WhatsAppFinanceRenderServer {
             // Inisialisasi database
             await this.db.init();
             console.log('✅ Database berhasil diinisialisasi');
+
+            // Start scheduled backup service
+            if (this.scheduledBackupService) {
+                this.scheduledBackupService.start();
+                console.log('✅ Scheduled backup service started');
+            }
 
             // Inisialisasi WhatsApp client dengan retry untuk Render
             if (this.isRenderEnvironment) {

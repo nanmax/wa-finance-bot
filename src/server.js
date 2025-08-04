@@ -692,13 +692,42 @@ class WhatsAppFinanceServer {
             body: message.body
         });
         
-        // Debug message data for contact name
-        if (message._data) {
-            console.log("📱 Message _data:", {
-                notifyName: message._data.notifyName,
-                pushName: message._data.pushName,
-                verifiedName: message._data.verifiedName
-            });
+        // BLOCK group management commands dari semua sumber kecuali dari diri sendiri
+        const isGroupManagementCommand = message.body.toLowerCase().startsWith('add group ') || 
+            message.body.toLowerCase().startsWith('remove group ') ||
+            message.body.toLowerCase() === 'list groups' ||
+            message.body.toLowerCase() === 'clear groups';
+        
+        if (isGroupManagementCommand) {
+            console.log(`🔍 Group Management Command Detected: ${message.body}`);
+            console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+            
+            // Hanya izinkan jika fromMe = true dan author adalah diri sendiri
+            if (!message.fromMe) {
+                console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
+                console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+                await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+                return;
+            }
+            
+                // Pastikan author ada dan adalah diri sendiri (format: 62895364680590:15@c.us)
+    if (!message.author) {
+        console.log(`🚫 BLOCKED: Group management command tanpa author`);
+        console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+        await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+        return;
+    }
+    
+    const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
+    const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
+    
+    if (authorBase !== fromBase) {
+        console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
+        console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+        console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
+        await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+        return;
+    }
         }
         
         // Debug message data for contact name
@@ -716,15 +745,23 @@ class WhatsAppFinanceServer {
         }
         
         // Handle group messages (from other people)
-        if (message.from.endsWith('@g.us') && !message.fromMe) {
+        if (message.from.endsWith('@g.us')) {
             console.log(`📨 Pesan dari group: ${message.body}`);
             console.log(`👤 Pengirim: ${message.author || 'Unknown'}`);
             console.log(`🏷️ Group ID: ${message.from}`);
             
             // Check if this group is registered/allowed
             const isGroupAllowed = this.isGroupAllowed(message.from);
+            
+            console.log(`📋 Group Check (dev):`);
+            console.log(`  - Message from: ${message.from}`);
+            console.log(`  - Allowed groups: ${JSON.stringify(this.config.allowedGroups || [])}`);
+            console.log(`  - Auto process all: ${this.config.autoProcessAllGroups}`);
+            console.log(`  - Legacy allowedGroupId: ${this.config.allowedGroupId}`);
+            console.log(`  - Is allowed: ${isGroupAllowed}`);
+            
             if (!isGroupAllowed) {
-                console.log(`⚠️ Group ${message.from} tidak terdaftar, diabaikan`);
+                console.log(`❌ Group ${message.from} tidak terdaftar, diabaikan`);
                 console.log(`💡 Daftar group yang diizinkan: ${JSON.stringify(this.config.allowedGroups || [])}`);
                 return;
             }
@@ -787,64 +824,114 @@ class WhatsAppFinanceServer {
                 console.log(`✅ Response terkirim: ${result}`);
             }
         }
-        // Handle self messages to registered groups (chat via pribadi)
-        else if (message.fromMe && message.from.endsWith('@c.us') && message.author) {
-            console.log(`👤 Pesan dari diri sendiri ke group: ${message.body}`);
-            console.log(`👤 Pengirim: ${message.author}`);
-            console.log(`🏷️ Chat ID: ${message.from}`);
-            
-            // For self messages, we need to check if the target group is registered
-            // Since this is a private chat, we'll process it if it's from the user
-            // and assume it's meant for a registered group
-            
-            // Get contact name for self messages using notifyName
-            let contactName = message.author;
-            try {
-                // Try notifyName first (most reliable)
-                if (message._data && message._data.notifyName) {
-                    contactName = message._data.notifyName;
-                    console.log(`✅ Self message - Menggunakan notifyName: ${contactName}`);
-                } else {
-                    // Fallback to getContact()
-                    const contact = await message.getContact();
-                    if (contact && contact.pushname) {
-                        contactName = contact.pushname;
-                        console.log(`✅ Self message - Menggunakan pushname: ${contactName}`);
-                    } else if (contact && contact.name) {
-                        contactName = contact.name;
-                        console.log(`✅ Self message - Menggunakan contact.name: ${contactName}`);
-                    } else {
-                        // Format phone number as fallback
-                        contactName = message.author.split('@')[0];
-                        console.log(`⚠️ Self message - Menggunakan formatted phone: ${contactName}`);
-                    }
-                }
-            } catch (error) {
-                console.log('⚠️ Tidak bisa mendapatkan nama kontak untuk self message, menggunakan formatted author');
-                contactName = message.author.split('@')[0];
+        
+        // Handle self messages for group management (HANYA dari diri sendiri)
+        if (message.fromMe) {
+            // Pastikan author ada dan adalah diri sendiri (format: 62895364680590:15@c.us)
+            if (!message.author) {
+                console.log(`⚠️ Self message tanpa author: ${message.body}`);
+                console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
+                return;
             }
             
-            // Process the message with AI
-            const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+            const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
+            const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
             
-            if (result) {
-                // Check if this is a send backup file request
-                if (result.includes('SEND BACKUP FILE') && result.includes('File sedang dikirim')) {
-                    // Extract file path from result
-                    const filePathMatch = result.match(/📁 \*Path:\* (.+)/);
-                    if (filePathMatch) {
-                        const filePath = filePathMatch[1];
-                        await this.sendBackupFile(message, filePath);
+            if (authorBase === fromBase) {
+                console.log(`🔐 Pesan dari diri sendiri: ${message.body}`);
+                console.log(`🔒 Group Management - Hanya diri sendiri yang diizinkan`);
+                console.log(`🔍 Validasi: fromMe=${message.fromMe}, from=${message.from}, author=${message.author}`);
+                console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
+                
+                // Handle group management commands
+                if (message.body.toLowerCase().startsWith('add group ')) {
+                    const groupId = message.body.substring(10).trim();
+                    if (groupId && groupId.includes('@g.us')) {
+                        const success = this.addAllowedGroup(groupId);
+                        const response = success ? 
+                            `✅ Group ${groupId} berhasil ditambahkan ke daftar yang diizinkan` :
+                            `⚠️ Group ${groupId} sudah ada di daftar yang diizinkan`;
+                        await message.reply(response);
+                        return;
+                    } else {
+                        await message.reply('❌ Format salah. Gunakan: add group [GROUP_ID]\nContoh: add group 1234567890@g.us');
+                        return;
                     }
                 }
                 
-                // Send response back to the same chat
-                await message.reply(result);
-                console.log(`✅ Response terkirim ke chat: ${result}`);
-            }
-        }
-        
-        // Handle file upload for restore
+                if (message.body.toLowerCase().startsWith('remove group ')) {
+                    const groupId = message.body.substring(13).trim();
+                    if (groupId && groupId.includes('@g.us')) {
+                        const success = this.removeAllowedGroup(groupId);
+                        const response = success ? 
+                            `✅ Group ${groupId} berhasil dihapus dari daftar yang diizinkan` :
+                            `⚠️ Group ${groupId} tidak ditemukan di daftar yang diizinkan`;
+                        await message.reply(response);
+                        return;
+                    } else {
+                        await message.reply('❌ Format salah. Gunakan: remove group [GROUP_ID]\nContoh: remove group 1234567890@g.us');
+                        return;
+                    }
+                }
+                
+                if (message.body.toLowerCase() === 'list groups') {
+                    const allowedGroups = this.getAllowedGroups();
+                    if (allowedGroups.length === 0) {
+                        await message.reply('📋 Daftar group yang diizinkan kosong');
+                    } else {
+                        const groupList = allowedGroups.map((groupId, index) => `${index + 1}. ${groupId}`).join('\n');
+                        await message.reply(`📋 Daftar group yang diizinkan:\n${groupList}`);
+                    }
+                    return;
+                }
+                
+                if (message.body.toLowerCase() === 'clear groups') {
+                    this.config.allowedGroups = [];
+                    this.saveConfig();
+                    await message.reply('🗑️ Semua group telah dihapus dari daftar yang diizinkan');
+                    return;
+                }
+                
+                // Handle other self messages (non-group management)
+                let contactName = message.author || 'Self';
+                try {
+                    if (message._data && message._data.notifyName) {
+                        contactName = message._data.notifyName;
+                    } else {
+                        const contact = await message.getContact();
+                        if (contact && contact.pushname) {
+                            contactName = contact.pushname;
+                        } else if (contact && contact.name) {
+                            contactName = contact.name;
+                        } else if (message.author) {
+                            contactName = message.author.split('@')[0];
+                        }
+                    }
+                } catch (error) {
+                    contactName = message.author ? message.author.split('@')[0] : 'Self';
+                }
+                
+                const result = await this.financeBot.processMessage(message.body, message.author, contactName);
+                
+                if (result) {
+                    // Check if this is a send backup file request
+                    if (result.includes('SEND BACKUP FILE') && result.includes('File sedang dikirim')) {
+                        // Extract file path from result
+                        const filePathMatch = result.match(/📁 \*Path:\* (.+)/);
+                        if (filePathMatch) {
+                            const filePath = filePathMatch[1];
+                            await this.sendBackupFile(message, filePath);
+                        }
+                    }
+                    
+                    // Send response back to the same chat
+                    await message.reply(result);
+                    console.log(`✅ Response terkirim ke chat: ${result}`);
+                }
+                    }
+    };
+    
+    // Handle file upload for restore
         if (message.hasMedia && message.type === 'document') {
             return await this.handleFileUpload(message);
         }

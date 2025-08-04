@@ -1,202 +1,185 @@
 const fs = require('fs');
 const path = require('path');
-const { exec } = require('child_process');
 
-class SessionErrorFixer {
+class SessionFixer {
     constructor() {
-        this.sessionPath = './.wwebjs_auth';
-        this.cachePath = './.wwebjs_cache';
+        this.authPath = process.env.AUTH_PATH || './.wwebjs_auth';
+        this.clientId = process.env.CLIENT_ID || 'wa-finance-render';
+        this.sessionPath = path.join(this.authPath, `session-${this.clientId}`);
     }
 
-    // Check if file is locked
-    isFileLocked(filePath) {
+    async forceCleanup() {
+        console.log('🔧 Memulai pembersihan session yang dipaksa...');
+        
         try {
-            // Try to open file for writing
-            const fd = fs.openSync(filePath, 'r+');
-            fs.closeSync(fd);
-            return false;
-        } catch (error) {
-            return error.code === 'EBUSY' || error.code === 'EACCES';
-        }
-    }
-
-    // Wait for file to be unlocked
-    async waitForFileUnlock(filePath, maxWaitTime = 10000) {
-        const startTime = Date.now();
-        
-        while (Date.now() - startTime < maxWaitTime) {
-            if (!this.isFileLocked(filePath)) {
-                return true;
-            }
-            console.log(`⏳ Menunggu file ${path.basename(filePath)} tidak digunakan...`);
-            await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-        
-        return false;
-    }
-
-    // Force kill Chrome processes (Windows)
-    async killChromeProcesses() {
-        return new Promise((resolve) => {
-            console.log('🔧 Mencoba menghentikan proses Chrome...');
+            // Tunggu sebentar untuk memastikan semua proses selesai
+            await this.delay(2000);
             
-            const command = process.platform === 'win32' 
-                ? 'taskkill /f /im chrome.exe /im chromedriver.exe 2>nul || echo "No Chrome processes found"'
-                : 'pkill -f chrome || echo "No Chrome processes found"';
-            
-            exec(command, (error, stdout, stderr) => {
-                if (error) {
-                    console.log('⚠️ Tidak ada proses Chrome yang perlu dihentikan');
-                } else {
-                    console.log('✅ Proses Chrome berhasil dihentikan');
+            if (fs.existsSync(this.sessionPath)) {
+                console.log(`📁 Session path ditemukan: ${this.sessionPath}`);
+                
+                // Coba hapus file yang bermasalah dengan retry
+                const problematicFiles = [
+                    'Default/Cookies-journal',
+                    'Default/Cookies',
+                    'Default/Web Data-journal',
+                    'Default/Web Data',
+                    'Default/Network Persistent State',
+                    'Default/Network Action Predictor',
+                    'Default/QuotaManager',
+                    'Default/QuotaManager-journal'
+                ];
+                
+                for (const file of problematicFiles) {
+                    await this.safeDeleteFile(file);
                 }
-                resolve();
-            });
-        });
+                
+                // Coba hapus seluruh folder Default jika masih ada masalah
+                const defaultPath = path.join(this.sessionPath, 'Default');
+                if (fs.existsSync(defaultPath)) {
+                    try {
+                        await this.recursiveDelete(defaultPath);
+                        console.log('✅ Berhasil menghapus folder Default');
+                    } catch (error) {
+                        console.log(`⚠️ Tidak bisa menghapus folder Default: ${error.message}`);
+                    }
+                }
+                
+                // Coba hapus seluruh session folder jika masih bermasalah
+                try {
+                    await this.recursiveDelete(this.sessionPath);
+                    console.log('✅ Berhasil menghapus seluruh session folder');
+                } catch (error) {
+                    console.log(`⚠️ Tidak bisa menghapus session folder: ${error.message}`);
+                }
+            } else {
+                console.log('📁 Session path tidak ditemukan, tidak perlu cleanup');
+            }
+            
+        } catch (error) {
+            console.error('❌ Error dalam force cleanup:', error.message);
+        }
     }
 
-    // Safe delete file with retry
-    async safeDeleteFile(filePath, maxRetries = 3) {
-        for (let i = 0; i < maxRetries; i++) {
+    async safeDeleteFile(relativePath) {
+        const filePath = path.join(this.sessionPath, relativePath);
+        
+        if (fs.existsSync(filePath)) {
             try {
-                if (fs.existsSync(filePath)) {
-                    // Wait for file to be unlocked
-                    const unlocked = await this.waitForFileUnlock(filePath);
-                    
-                    if (unlocked) {
+                // Coba hapus dengan retry
+                for (let i = 0; i < 3; i++) {
+                    try {
                         fs.unlinkSync(filePath);
-                        console.log(`✅ Berhasil menghapus: ${path.basename(filePath)}`);
-                        return true;
-                    } else {
-                        console.log(`⚠️ File masih terkunci: ${path.basename(filePath)}`);
-                        
-                        if (i === maxRetries - 1) {
-                            // Last attempt - try to kill Chrome processes
-                            await this.killChromeProcesses();
-                            await new Promise(resolve => setTimeout(resolve, 2000));
-                            
-                            try {
-                                fs.unlinkSync(filePath);
-                                console.log(`✅ Berhasil menghapus setelah kill Chrome: ${path.basename(filePath)}`);
-                                return true;
-                            } catch (finalError) {
-                                console.error(`❌ Gagal menghapus file: ${path.basename(filePath)}`);
-                                return false;
-                            }
+                        console.log(`✅ Berhasil menghapus: ${relativePath}`);
+                        return;
+                    } catch (error) {
+                        if (i < 2) {
+                            console.log(`⏳ Retry ${i + 1}/3 untuk ${relativePath}...`);
+                            await this.delay(1000);
+                        } else {
+                            console.log(`⚠️ Gagal menghapus ${relativePath}: ${error.message}`);
                         }
                     }
-                } else {
-                    console.log(`ℹ️ File tidak ada: ${path.basename(filePath)}`);
-                    return true;
                 }
             } catch (error) {
-                console.log(`⚠️ Attempt ${i + 1} gagal: ${error.message}`);
-                if (i < maxRetries - 1) {
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
+                console.log(`⚠️ Error menghapus ${relativePath}: ${error.message}`);
             }
-        }
-        return false;
-    }
-
-    // Clear session with error handling
-    async clearSession() {
-        console.log('🧹 Membersihkan session WhatsApp...');
-        
-        try {
-            // First, try to kill Chrome processes
-            await this.killChromeProcesses();
-            
-            // Wait a bit for processes to fully terminate
-            await new Promise(resolve => setTimeout(resolve, 3000));
-            
-            // Clear session directory
-            if (fs.existsSync(this.sessionPath)) {
-                console.log('🗑️ Menghapus session directory...');
-                
-                // Try to remove the entire directory
-                try {
-                    fs.rmSync(this.sessionPath, { recursive: true, force: true });
-                    console.log('✅ Session directory berhasil dihapus');
-                } catch (error) {
-                    console.log('⚠️ Gagal hapus directory, mencoba hapus file satu per satu...');
-                    
-                    // If directory removal fails, try to remove files individually
-                    await this.removeDirectoryContents(this.sessionPath);
-                }
-            }
-            
-            // Clear cache directory
-            if (fs.existsSync(this.cachePath)) {
-                console.log('🗑️ Menghapus cache directory...');
-                try {
-                    fs.rmSync(this.cachePath, { recursive: true, force: true });
-                    console.log('✅ Cache directory berhasil dihapus');
-                } catch (error) {
-                    console.log('⚠️ Gagal hapus cache directory, mencoba hapus file satu per satu...');
-                    await this.removeDirectoryContents(this.cachePath);
-                }
-            }
-            
-            console.log('✅ Session berhasil dibersihkan');
-            return true;
-            
-        } catch (error) {
-            console.error('❌ Error membersihkan session:', error.message);
-            return false;
         }
     }
 
-    // Remove directory contents safely
-    async removeDirectoryContents(dirPath) {
-        try {
+    async recursiveDelete(dirPath) {
+        if (fs.existsSync(dirPath)) {
             const files = fs.readdirSync(dirPath);
             
             for (const file of files) {
-                const filePath = path.join(dirPath, file);
-                const stat = fs.statSync(filePath);
+                const curPath = path.join(dirPath, file);
                 
-                if (stat.isDirectory()) {
-                    await this.removeDirectoryContents(filePath);
-                    try {
-                        fs.rmdirSync(filePath);
-                    } catch (error) {
-                        console.log(`⚠️ Tidak bisa hapus directory: ${file}`);
-                    }
+                if (fs.lstatSync(curPath).isDirectory()) {
+                    await this.recursiveDelete(curPath);
                 } else {
-                    await this.safeDeleteFile(filePath);
+                    try {
+                        fs.unlinkSync(curPath);
+                    } catch (error) {
+                        console.log(`⚠️ Tidak bisa menghapus file: ${curPath}`);
+                    }
                 }
             }
-        } catch (error) {
-            console.log(`⚠️ Error membaca directory: ${error.message}`);
+            
+            try {
+                fs.rmdirSync(dirPath);
+            } catch (error) {
+                console.log(`⚠️ Tidak bisa menghapus directory: ${dirPath}`);
+            }
         }
     }
 
-    // Fix session error
-    async fixSessionError() {
-        console.log('🔧 Memperbaiki error session WhatsApp...');
-        console.log('========================================');
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    async createBackup() {
+        const backupPath = `./backups/session-backup-${new Date().toISOString().replace(/[:.]/g, '-')}`;
         
-        const success = await this.clearSession();
-        
-        if (success) {
-            console.log('\n✅ Session berhasil dibersihkan!');
-            console.log('💡 Sekarang coba jalankan bot lagi:');
-            console.log('   npm run dev');
-        } else {
-            console.log('\n❌ Gagal membersihkan session');
-            console.log('💡 Coba restart komputer dan jalankan lagi');
+        try {
+            if (fs.existsSync(this.sessionPath)) {
+                if (!fs.existsSync('./backups')) {
+                    fs.mkdirSync('./backups', { recursive: true });
+                }
+                
+                // Copy session folder ke backup
+                await this.copyDirectory(this.sessionPath, backupPath);
+                console.log(`✅ Backup session dibuat di: ${backupPath}`);
+            }
+        } catch (error) {
+            console.log(`⚠️ Gagal membuat backup: ${error.message}`);
+        }
+    }
+
+    async copyDirectory(src, dest) {
+        if (!fs.existsSync(dest)) {
+            fs.mkdirSync(dest, { recursive: true });
         }
         
-        return success;
+        const files = fs.readdirSync(src);
+        
+        for (const file of files) {
+            const srcPath = path.join(src, file);
+            const destPath = path.join(dest, file);
+            
+            if (fs.lstatSync(srcPath).isDirectory()) {
+                await this.copyDirectory(srcPath, destPath);
+            } else {
+                try {
+                    fs.copyFileSync(srcPath, destPath);
+                } catch (error) {
+                    console.log(`⚠️ Tidak bisa copy file: ${srcPath}`);
+                }
+            }
+        }
     }
 }
 
-// Export for use in other files
-module.exports = SessionErrorFixer;
+// Jalankan fixer
+async function main() {
+    console.log('🚀 Memulai perbaikan session error...');
+    
+    const fixer = new SessionFixer();
+    
+    // Buat backup terlebih dahulu
+    await fixer.createBackup();
+    
+    // Lakukan force cleanup
+    await fixer.forceCleanup();
+    
+    console.log('✅ Proses perbaikan session selesai!');
+    console.log('💡 Tips:');
+    console.log('   - Restart aplikasi dengan: npm run start:finance');
+    console.log('   - Jika masih error, coba matikan semua proses Node.js terlebih dahulu');
+    console.log('   - Pastikan tidak ada aplikasi lain yang menggunakan session yang sama');
+}
 
-// Run if called directly
 if (require.main === module) {
-    const fixer = new SessionErrorFixer();
-    fixer.fixSessionError();
-} 
+    main().catch(console.error);
+}
+
+module.exports = SessionFixer; 
