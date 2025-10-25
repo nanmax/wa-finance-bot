@@ -22,7 +22,8 @@
     "session:clear": "node -e \"const SessionManager = require('./session-manager.js'); const manager = new SessionManager(); manager.clearSession();\"",
     "session:backup": "node -e \"const SessionManager = require('./session-manager.js'); const manager = new SessionManager(); manager.backupSession();\"",
     "session:fix": "node fix-session-error.js",
-    "start:session": "node session-manager.js && npm run dev"
+    "start:session": "node session-manager.js && npm run dev",
+    "build": "echo 'No build step required'"
   },
   "keywords": [
     "whatsapp",
@@ -46,7 +47,7 @@
     "puppeteer": "^20.9.0",
     "qrcode": "^1.5.4",
     "qrcode-terminal": "^0.12.0",
-    "sqlite3": "^5.1.6",
+    "better-sqlite3": "^9.4.0",
     "whatsapp-web.js": "^1.23.0"
   },
   "devDependencies": {
@@ -54,6 +55,6 @@
     "nodemon": "^3.0.1"
   },
   "engines": {
-    "node": ">=16.0.0"
+    "node": "20.x"
   }
 }
