@@ -214,27 +214,11 @@ class ScheduledBackupService {
         console.log('🛑 All scheduled backup jobs stopped');
     }
 
-    generateBackupFileCaption(backupResult, schedule) {
-        const metadata = backupResult.metadata;
-        const timestamp = new Date().toLocaleString('id-ID');
-        
-        let caption = `📦 *BACKUP FILE - ${schedule.name.toUpperCase()}*\n\n`;
-        caption += `📅 *Tanggal Backup:* ${timestamp}\n`;
-        caption += `📦 *File:* ${backupResult.fileName}\n`;
-        caption += `📊 *Data Summary:*\n`;
-        caption += `• Total Transaksi: ${metadata.totalTransactions}\n`;
-        caption += `• Total Pemasukan: Rp ${this.formatCurrency(metadata.totalIncome)}\n`;
-        caption += `• Total Pengeluaran: Rp ${this.formatCurrency(metadata.totalExpense)}\n\n`;
-        caption += `💡 *Cara Download:*\n`;
-        caption += `• Tap file di atas untuk download\n`;
-        caption += `• Simpan file untuk restore nanti\n`;
-        caption += `• File berformat .zip\n\n`;
-        caption += `🔄 *Cara Restore:*\n`;
-        caption += `• Upload file ini ke bot\n`;
-        caption += `• Ketik "restore confirm"\n`;
-        caption += `• Data akan dipulihkan otomatis`;
-        
-        return caption;
+    // Main start method untuk memulai service
+    start() {
+        console.log('🕐 Starting Scheduled Backup Service...');
+        this.startAllScheduledJobs();
+        console.log('✅ Scheduled Backup Service started successfully');
     }
 }
 
