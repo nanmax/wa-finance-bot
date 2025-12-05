@@ -4,8 +4,12 @@
   "description": "WhatsApp AI Bot untuk pencatatan keuangan",
   "main": "src/whatsapp-finance-render.js",
   "scripts": {
-    "start": "node src/whatsapp-finance-render.js",
-    "dev": "nodemon src/whatsapp-finance-render.js",
+    "start": "node src/telegram-finance-bot.js",
+    "start:telegram": "node src/telegram-finance-bot.js",
+    "start:whatsapp": "node src/whatsapp-finance-render.js",
+    "dev": "nodemon src/telegram-finance-bot.js",
+    "dev:telegram": "nodemon src/telegram-finance-bot.js",
+    "dev:whatsapp": "nodemon src/whatsapp-finance-render.js",
     "test": "jest",
     "build": "echo 'No build step required'"
   },
@@ -27,6 +31,7 @@
     "extract-zip": "^2.0.1",
     "moment": "^2.29.4",
     "node-cron": "^4.2.1",
+    "node-telegram-bot-api": "^0.66.0",
     "openai": "^4.20.1",
     "puppeteer": "^20.9.0",
     "qrcode": "^1.5.4",

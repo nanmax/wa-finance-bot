@@ -202,52 +202,6 @@ class WhatsAppFinanceRenderServer {
     }
 
     setupWhatsAppClient() {
-        const puppeteerArgs = [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-            '--memory-pressure-off',
-            '--max_old_space_size=128',
-            '--disable-extensions',
-            '--disable-plugins',
-            '--disable-images',
-            '--disable-javascript',
-            '--disable-default-apps',
-            '--disable-sync',
-            '--disable-translate',
-            '--hide-scrollbars',
-            '--mute-audio',
-            '--no-default-browser-check',
-            '--no-experiments',
-            '--no-pings',
-            '--disable-logging',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--single-process',
-            '--disable-background-timer-throttling',
-            '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding',
-            // Optimasi untuk plan free
-            '--disable-background-networking',
-            '--safebrowsing-disable-auto-update',
-            '--disable-client-side-phishing-detection',
-            '--disable-component-update',
-            '--disable-domain-reliability',
-            '--disable-features=TranslateUI',
-            '--disable-ipc-flooding-protection',
-            '--disable-hang-monitor',
-            '--disable-prompt-on-repost',
-            '--disable-field-trial-config',
-            '--disable-back-forward-cache',
-            '--disable-http2',
-            '--disable-gpu-sandbox',
-            '--disable-software-rasterizer'
-        ];
-
         // Konfigurasi path untuk session persistence
         const authPath = process.env.AUTH_PATH || './.wwebjs_auth';
         const clientId = process.env.CLIENT_ID || 'wa-finance-render';
@@ -262,21 +216,29 @@ class WhatsAppFinanceRenderServer {
             authStrategy: new LocalAuth({
                 clientId: clientId,
                 dataPath: authPath,
-                // Tambahan konfigurasi untuk memastikan session tersimpan
-                backupSyncIntervalMs: 300000, // 5 menit
+                backupSyncIntervalMs: 300000,
                 disableInlinedChunksInDataURL: true
             }),
             puppeteer: {
                 headless: true,
-                args: puppeteerArgs,
-                executablePath: undefined,
-                defaultViewport: { width: 640, height: 480 },
+                args: [
+                    '--no-sandbox',
+                    '--disable-gpu',
+                    '--disable-dev-shm-usage',
+                    '--disable-setuid-sandbox',
+                    '--no-first-run',
+                    '--no-zygote',
+                    '--single-process'
+                ],
                 ignoreHTTPSErrors: true,
-                timeout: 30000
+                timeout: 60000
             },
-            // Enable self message detection
+            // Fix untuk error 'getChat' - gunakan webVersionCache dari wppconnect-team
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html',
+            },
             selfMessage: true,
-            // Tambahan konfigurasi untuk session persistence
             takeoverOnConflict: true,
             takeoverTimeoutMs: 10000
         });
