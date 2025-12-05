@@ -524,24 +524,11 @@ class WhatsAppFinanceRenderServer {
             if (isGroupManagementCommand) {
                 console.log(`🔍 Group Management Command Detected: ${message.body}`);
                 console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
-                
-                // Hanya izinkan jika fromMe = true dan author adalah diri sendiri
+
+                // Hanya izinkan jika fromMe = true
                 if (!message.fromMe) {
                     console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
-                    console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
-                    await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
-                    return;
-                }
-                
-                // Pastikan author adalah diri sendiri (format: 62895364680590:15@c.us)
-                const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
-                const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
-                
-                if (authorBase !== fromBase) {
-                    console.log(`🚫 BLOCKED: Group management command bukan dari diri sendiri`);
-                    console.log(`🔍 FromMe: ${message.fromMe}, From: ${message.from}, Author: ${message.author}`);
-                    console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
-                    await message.reply('🚫 *AKSES DITOLAK*\n\nGroup management hanya bisa diakses dari diri sendiri');
+                    // Jangan reply untuk menghindari error getChat
                     return;
                 }
             }
@@ -562,18 +549,10 @@ class WhatsAppFinanceRenderServer {
 
                         // Handle self messages for group management (HANYA dari diri sendiri)
             if (message.fromMe) {
-                // Pastikan author adalah diri sendiri (format: 62895364680590:15@c.us)
-                const authorBase = message.author.split(':')[0]; // Ambil bagian sebelum :
-                const fromBase = message.from.split('@')[0]; // Ambil bagian sebelum @
-                
-                if (authorBase === fromBase) {
-                    console.log(`🔐 Pesan dari diri sendiri: ${message.body}`);
-                    console.log(`🔒 Group Management - Hanya diri sendiri yang diizinkan`);
-                    console.log(`🔍 Validasi: fromMe=${message.fromMe}, from=${message.from}, author=${message.author}`);
-                    console.log(`🔍 AuthorBase: ${authorBase}, FromBase: ${fromBase}`);
-                    
-                    // Handle group management commands
-                    if (message.body.toLowerCase().startsWith('add group ')) {
+                console.log(`🔐 Pesan dari diri sendiri: ${message.body}`);
+
+                // Handle group management commands
+                if (message.body.toLowerCase().startsWith('add group ')) {
                     const groupId = message.body.substring(10).trim();
                     if (groupId && groupId.includes('@g.us')) {
                         const success = this.addAllowedGroup(groupId);
@@ -730,7 +709,7 @@ class WhatsAppFinanceRenderServer {
                 }
             }
         }
-    };
+        ;
 
         // Event handler panggil fungsi yang sama
         this.client.on('message', this.handleWhatsAppMessage);

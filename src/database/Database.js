@@ -1,4 +1,4 @@
-const sqlite3 = require('sqlite3').verbose();
+const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
@@ -9,199 +9,189 @@ class Database {
     }
 
     async init() {
-        return new Promise((resolve, reject) => {
-            // Ensure data directory exists
-            const dataDir = path.dirname(this.dbPath);
-            if (!fs.existsSync(dataDir)) {
-                fs.mkdirSync(dataDir, { recursive: true });
-            }
+        // Ensure data directory exists
+        const dataDir = path.dirname(this.dbPath);
+        if (!fs.existsSync(dataDir)) {
+            fs.mkdirSync(dataDir, { recursive: true });
+        }
 
-            this.db = new sqlite3.Database(this.dbPath, (err) => {
-                if (err) {
-                    console.error('Error opening database:', err);
-                    reject(err);
-                    return;
-                }
-                
-                this.createTables()
-                    .then(() => resolve())
-                    .catch(reject);
-            });
-        });
+        const SQL = await initSqlJs();
+
+        // Load existing database or create new one
+        if (fs.existsSync(this.dbPath)) {
+            const fileBuffer = fs.readFileSync(this.dbPath);
+            this.db = new SQL.Database(fileBuffer);
+            console.log('✅ Database loaded from file');
+        } else {
+            this.db = new SQL.Database();
+            console.log('✅ New database created');
+        }
+
+        await this.createTables();
+        this.saveToFile(); // Save initial state
+    }
+
+    saveToFile() {
+        try {
+            const data = this.db.export();
+            const buffer = Buffer.from(data);
+            fs.writeFileSync(this.dbPath, buffer);
+        } catch (error) {
+            console.error('Error saving database to file:', error);
+        }
     }
 
     async createTables() {
-        return new Promise((resolve, reject) => {
-            const createTableSQL = `
-                CREATE TABLE IF NOT EXISTS transactions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    type TEXT NOT NULL,
-                    amount REAL NOT NULL,
-                    description TEXT,
-                    category TEXT,
-                    author TEXT,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    original_message TEXT,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            `;
+        const createTableSQL = `
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                description TEXT,
+                category TEXT,
+                author TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                original_message TEXT,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `;
 
-            this.db.run(createTableSQL, (err) => {
-                if (err) {
-                    console.error('Error creating table:', err);
-                    reject(err);
-                    return;
-                }
-                console.log('✅ Database tables created successfully');
-                resolve();
-            });
-        });
+        this.db.run(createTableSQL);
+        console.log('✅ Database tables created successfully');
     }
 
     async saveTransaction(transaction) {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                INSERT INTO transactions (type, amount, description, category, author, original_message)
-                VALUES (?, ?, ?, ?, ?, ?)
-            `;
-            
-            const params = [
-                transaction.type,
-                transaction.amount,
-                transaction.description,
-                transaction.category,
-                transaction.author,
-                transaction.original_message
-            ];
+        const sql = `
+            INSERT INTO transactions (type, amount, description, category, author, original_message, timestamp, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+        `;
 
-            this.db.run(sql, params, function(err) {
-                if (err) {
-                    console.error('Error saving transaction:', err);
-                    reject(err);
-                    return;
-                }
-                
-                // Get the inserted record
-                this.getTransaction(this.lastID).then(resolve).catch(reject);
-            }.bind(this));
-        });
+        this.db.run(sql, [
+            transaction.type,
+            transaction.amount,
+            transaction.description,
+            transaction.category,
+            transaction.author,
+            transaction.original_message
+        ]);
+
+        this.saveToFile();
+
+        // Get the last inserted ID
+        const result = this.db.exec("SELECT last_insert_rowid() as id");
+        const lastId = result[0]?.values[0]?.[0];
+
+        return this.getTransaction(lastId);
     }
 
     async getTransactions(limit = 100) {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT * FROM transactions 
-                ORDER BY timestamp DESC 
-                LIMIT ?
-            `;
+        const sql = `
+            SELECT * FROM transactions
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `;
 
-            this.db.all(sql, [limit], (err, rows) => {
-                if (err) {
-                    console.error('Error getting transactions:', err);
-                    reject(err);
-                    return;
-                }
-                resolve(rows);
-            });
-        });
+        const stmt = this.db.prepare(sql);
+        stmt.bind([limit]);
+
+        const rows = [];
+        while (stmt.step()) {
+            rows.push(this.rowToObject(stmt.getAsObject()));
+        }
+        stmt.free();
+
+        return rows;
     }
 
     async getTransaction(id) {
-        return new Promise((resolve, reject) => {
-            const sql = 'SELECT * FROM transactions WHERE id = ?';
-            
-            this.db.get(sql, [id], (err, row) => {
-                if (err) {
-                    console.error('Error getting transaction:', err);
-                    reject(err);
-                    return;
-                }
-                resolve(row);
-            });
-        });
+        const sql = 'SELECT * FROM transactions WHERE id = ?';
+        const stmt = this.db.prepare(sql);
+        stmt.bind([id]);
+
+        let row = null;
+        if (stmt.step()) {
+            row = this.rowToObject(stmt.getAsObject());
+        }
+        stmt.free();
+
+        return row;
     }
 
     async getTransactionsByType(type, limit = 50) {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT * FROM transactions 
-                WHERE type = ? 
-                ORDER BY timestamp DESC 
-                LIMIT ?
-            `;
+        const sql = `
+            SELECT * FROM transactions
+            WHERE type = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+        `;
 
-            this.db.all(sql, [type, limit], (err, rows) => {
-                if (err) {
-                    console.error('Error getting transactions by type:', err);
-                    reject(err);
-                    return;
-                }
-                resolve(rows);
-            });
-        });
+        const stmt = this.db.prepare(sql);
+        stmt.bind([type, limit]);
+
+        const rows = [];
+        while (stmt.step()) {
+            rows.push(this.rowToObject(stmt.getAsObject()));
+        }
+        stmt.free();
+
+        return rows;
     }
 
     async getTransactionsByDateRange(startDate, endDate) {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT * FROM transactions 
-                WHERE timestamp BETWEEN ? AND ?
-                ORDER BY timestamp DESC
-            `;
+        const sql = `
+            SELECT * FROM transactions
+            WHERE timestamp BETWEEN ? AND ?
+            ORDER BY timestamp DESC
+        `;
 
-            this.db.all(sql, [startDate, endDate], (err, rows) => {
-                if (err) {
-                    console.error('Error getting transactions by date range:', err);
-                    reject(err);
-                    return;
-                }
-                resolve(rows);
-            });
-        });
+        const stmt = this.db.prepare(sql);
+        stmt.bind([startDate, endDate]);
+
+        const rows = [];
+        while (stmt.step()) {
+            rows.push(this.rowToObject(stmt.getAsObject()));
+        }
+        stmt.free();
+
+        return rows;
     }
 
     async getSummary() {
-        return new Promise((resolve, reject) => {
-            const sql = `
-                SELECT 
-                    SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
-                    SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense,
-                    COUNT(*) as total_transactions
-                FROM transactions
-            `;
+        const sql = `
+            SELECT
+                SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
+                SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expense,
+                COUNT(*) as total_transactions
+            FROM transactions
+        `;
 
-            this.db.get(sql, (err, row) => {
-                if (err) {
-                    console.error('Error getting summary:', err);
-                    reject(err);
-                    return;
-                }
-                
-                const summary = {
-                    totalIncome: row.total_income || 0,
-                    totalExpense: row.total_expense || 0,
-                    totalTransactions: row.total_transactions || 0,
-                    balance: (row.total_income || 0) - (row.total_expense || 0)
-                };
-                
-                resolve(summary);
-            });
-        });
+        const result = this.db.exec(sql);
+
+        if (result.length === 0 || result[0].values.length === 0) {
+            return {
+                totalIncome: 0,
+                totalExpense: 0,
+                totalTransactions: 0,
+                balance: 0
+            };
+        }
+
+        const row = result[0].values[0];
+        return {
+            totalIncome: row[0] || 0,
+            totalExpense: row[1] || 0,
+            totalTransactions: row[2] || 0,
+            balance: (row[0] || 0) - (row[1] || 0)
+        };
     }
 
     async deleteTransaction(id) {
-        return new Promise((resolve, reject) => {
-            const sql = 'DELETE FROM transactions WHERE id = ?';
-            
-            this.db.run(sql, [id], function(err) {
-                if (err) {
-                    console.error('Error deleting transaction:', err);
-                    reject(err);
-                    return;
-                }
-                resolve(this.changes > 0);
-            });
-        });
+        const sql = 'DELETE FROM transactions WHERE id = ?';
+        this.db.run(sql, [id]);
+        this.saveToFile();
+
+        const changes = this.db.getRowsModified();
+        return changes > 0;
     }
 
     async loadConfig() {
@@ -240,32 +230,34 @@ class Database {
     }
 
     async clearAllData() {
-        return new Promise((resolve, reject) => {
-            const sql = 'DELETE FROM transactions';
-            
-            this.db.run(sql, (err) => {
-                if (err) {
-                    console.error('Error clearing all data:', err);
-                    reject(err);
-                    return;
-                }
-                console.log('✅ All transactions cleared');
-                resolve(true);
-            });
-        });
+        const sql = 'DELETE FROM transactions';
+        this.db.run(sql);
+        this.saveToFile();
+        console.log('✅ All transactions cleared');
+        return true;
+    }
+
+    rowToObject(row) {
+        return {
+            id: row.id,
+            type: row.type,
+            amount: row.amount,
+            description: row.description,
+            category: row.category,
+            author: row.author,
+            timestamp: row.timestamp,
+            original_message: row.original_message,
+            created_at: row.created_at
+        };
     }
 
     close() {
         if (this.db) {
-            this.db.close((err) => {
-                if (err) {
-                    console.error('Error closing database:', err);
-                } else {
-                    console.log('✅ Database closed successfully');
-                }
-            });
+            this.saveToFile();
+            this.db.close();
+            console.log('✅ Database closed successfully');
         }
     }
 }
 
-module.exports = Database; 
+module.exports = Database;
