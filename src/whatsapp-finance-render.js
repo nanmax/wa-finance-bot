@@ -86,17 +86,9 @@ class WhatsAppFinanceRenderServer {
 
     // Check if a group is allowed
     isGroupAllowed(groupId) {
-        // Check if group is in allowed groups list
-        if (this.config.allowedGroups && this.config.allowedGroups.includes(groupId)) {
-            return true;
-        }
-        
-        // Check legacy allowedGroupId
-        if (this.config.allowedGroupId && groupId === this.config.allowedGroupId) {
-            return true;
-        }
-        
-        return false;
+        const allowedGroups = this.getAllowedGroups();
+        console.log(`🔍 Checking if group ${groupId} is allowed. Allowed groups: ${JSON.stringify(allowedGroups)}`);
+        return allowedGroups.includes(groupId);
     }
 
     // Add group to allowed list
@@ -129,20 +121,37 @@ class WhatsAppFinanceRenderServer {
         }
     }
 
-    // Get all allowed groups
+    // Get all allowed groups (from config + env)
     getAllowedGroups() {
-        return this.config.allowedGroups || [];
+        const groups = [...(this.config.allowedGroups || [])];
+
+        // Tambahkan dari env WHATSAPP_GROUP_ID jika ada dan belum ada di list
+        if (process.env.WHATSAPP_GROUP_ID && !groups.includes(process.env.WHATSAPP_GROUP_ID)) {
+            groups.push(process.env.WHATSAPP_GROUP_ID);
+        }
+
+        // Tambahkan dari legacy config allowedGroupId jika ada dan belum ada di list
+        if (this.config.allowedGroupId && !groups.includes(this.config.allowedGroupId)) {
+            groups.push(this.config.allowedGroupId);
+        }
+
+        return groups;
     }
 
     checkEnvironment() {
         console.log('🔧 Environment Check:');
         console.log(`  - OPENAI_API_KEY: ${process.env.OPENAI_API_KEY ? 'Set' : 'Not set'}`);
+        console.log(`  - WHATSAPP_GROUP_ID: ${process.env.WHATSAPP_GROUP_ID || 'Not set'}`);
         console.log(`  - AUTH_PATH: ${process.env.AUTH_PATH || './.wwebjs_auth'}`);
         console.log(`  - CLIENT_ID: ${process.env.CLIENT_ID || 'wa-finance-render'}`);
         console.log(`  - PORT: ${process.env.PORT || 3000}`);
-        
+
         if (!process.env.OPENAI_API_KEY) {
             console.log('⚠️ OpenAI API key tidak ditemukan, AI features akan menggunakan pattern matching');
+        }
+
+        if (process.env.WHATSAPP_GROUP_ID) {
+            console.log(`✅ Group dari env: ${process.env.WHATSAPP_GROUP_ID}`);
         }
     }
 
@@ -316,31 +325,63 @@ class WhatsAppFinanceRenderServer {
         this.financeBot = new FinanceBot(this.db, this.aiService, this.backupService, this.scheduledBackupService);
     }
 
-    async safeSendMessage(message, text) {
+    async safeSendMessage(message, text, retryCount = 0) {
+        const maxRetries = 2;
+
         if (!message || !text) {
             console.log('⚠️ Invalid message or text for sending reply');
             return false;
         }
 
-        // Skip sending if message is from undefined
         if (!message.from) {
             console.log('⚠️ No chat ID found, skipping reply');
             return false;
         }
 
-        // Check if client is connected
-        if (!this.client || !this.client.isConnected) {
-            console.log('⚠️ Client not connected, skipping reply');
+        if (!this.client) {
+            console.log('⚠️ Client not initialized, skipping reply');
             return false;
         }
 
         try {
-            // Simple direct send without reply - most reliable
             await this.client.sendMessage(message.from, text);
-            console.log('✅ Message sent successfully to:', message.from);
+            console.log('✅ Message sent to:', message.from);
+            this.consecutiveErrors = 0; // Reset error counter on success
             return true;
         } catch (error) {
-            console.error('❌ Failed to send message:', error.message);
+            const isContextError = error.message?.includes('context was destroyed') ||
+                                   error.message?.includes('navigation') ||
+                                   error.message?.includes('getChat') ||
+                                   error.message?.includes('Evaluation failed');
+
+            if (isContextError) {
+                this.consecutiveErrors = (this.consecutiveErrors || 0) + 1;
+                console.log(`⚠️ Context error #${this.consecutiveErrors}: ${error.message}`);
+
+                // If too many consecutive errors, trigger page refresh
+                if (this.consecutiveErrors >= 3 && !this.isRefreshing) {
+                    console.log('🔄 Too many context errors, refreshing WhatsApp page...');
+                    this.isRefreshing = true;
+                    try {
+                        await this.client.pupPage.reload();
+                        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait for page to load
+                        console.log('✅ Page refreshed successfully');
+                        this.consecutiveErrors = 0;
+                    } catch (refreshError) {
+                        console.error('❌ Page refresh failed:', refreshError.message);
+                    }
+                    this.isRefreshing = false;
+                }
+
+                if (retryCount < maxRetries) {
+                    const delay = (retryCount + 1) * 1500;
+                    console.log(`🔄 Retrying in ${delay}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                    return this.safeSendMessage(message, text, retryCount + 1);
+                }
+            }
+
+            console.error('❌ sendMessage failed:', error.message);
             return false;
         }
     }
@@ -352,14 +393,14 @@ class WhatsAppFinanceRenderServer {
             // Check if file is a zip file
             const fileName = message.body || 'unknown';
             if (!fileName.toLowerCase().endsWith('.zip')) {
-                await message.reply('❌ *FILE TIDAK VALID*\n\nFile harus berformat .zip (backup file)\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip');
+                await this.safeSendMessage(message, '❌ *FILE TIDAK VALID*\n\nFile harus berformat .zip (backup file)\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip');
                 return;
             }
 
             // Download the file
             const media = await message.downloadMedia();
             if (!media) {
-                await message.reply('❌ *DOWNLOAD GAGAL*\n\nTidak bisa mengunduh file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
+                await this.safeSendMessage(message, '❌ *DOWNLOAD GAGAL*\n\nTidak bisa mengunduh file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
                 return;
             }
 
@@ -379,7 +420,7 @@ class WhatsAppFinanceRenderServer {
             const validation = await this.backupService.validateBackupFile(filePath);
             if (!validation.valid) {
                 fs.unlinkSync(filePath); // Clean up
-                await message.reply(`❌ *BACKUP FILE TIDAK VALID*\n\nError: ${validation.error}\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip`);
+                await this.safeSendMessage(message, `❌ *BACKUP FILE TIDAK VALID*\n\nError: ${validation.error}\n\n💡 *Tips:*\n• Pastikan file adalah backup yang valid\n• File backup harus berformat .zip`);
                 return;
             }
 
@@ -396,7 +437,7 @@ class WhatsAppFinanceRenderServer {
             confirmMessage += `• Ketik "restore confirm" untuk melanjutkan\n`;
             confirmMessage += `• Atau ketik "restore cancel" untuk membatalkan`;
 
-            await message.reply(confirmMessage);
+            await this.safeSendMessage(message, confirmMessage);
 
             // Store file path for confirmation
             this.pendingRestoreFile = filePath;
@@ -404,40 +445,50 @@ class WhatsAppFinanceRenderServer {
 
         } catch (error) {
             console.error('❌ Error handling file upload:', error);
-            await message.reply('❌ *ERROR*\n\nTerjadi kesalahan saat memproses file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
+            await this.safeSendMessage(message, '❌ *ERROR*\n\nTerjadi kesalahan saat memproses file\n\n💡 *Tips:*\n• Pastikan file tidak rusak\n• Coba kirim ulang file');
         }
     }
 
     async sendBackupFile(message, filePath) {
         try {
             console.log(`📤 Sending backup file: ${filePath}`);
-            
+
             // Check if file exists on disk
             if (!fs.existsSync(filePath)) {
                 console.log(`❌ Backup file not found on disk: ${filePath}`);
-                await message.reply('❌ *ERROR*\n\nFile backup tidak ditemukan di server\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
+                await this.safeSendMessage(message, '❌ *ERROR*\n\nFile backup tidak ditemukan di server\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
                 return;
             }
-            
+
             // Get file info
             const fileName = path.basename(filePath);
             const stats = fs.statSync(filePath);
             const fileSize = this.formatFileSize(stats.size);
             const createdDate = new Date(stats.birthtime).toLocaleString('id-ID');
-            
-            // Send file via WhatsApp
-            const { MessageMedia } = require('whatsapp-web.js');
-            const media = MessageMedia.fromFilePath(filePath);
-            
-            await message.reply(media, {
-                caption: `📦 *BACKUP FILE*\n\n📦 File: ${fileName}\n📅 Created: ${createdDate}\n📏 Size: ${fileSize}\n\n💡 *Tips:*\n• Simpan file untuk restore nanti\n• File berformat .zip\n• Upload file ini untuk restore`
-            });
-            
-            console.log(`✅ Backup file sent: ${fileName}`);
-            
+
+            // Send file via WhatsApp with try-catch
+            try {
+                const { MessageMedia } = require('whatsapp-web.js');
+                const media = MessageMedia.fromFilePath(filePath);
+
+                // Use getChatById for more reliable sending
+                const chat = await this.client.getChatById(message.from);
+                if (chat) {
+                    await chat.sendMessage(media, {
+                        caption: `📦 *BACKUP FILE*\n\n📦 File: ${fileName}\n📅 Created: ${createdDate}\n📏 Size: ${fileSize}\n\n💡 *Tips:*\n• Simpan file untuk restore nanti\n• File berformat .zip\n• Upload file ini untuk restore`
+                    });
+                    console.log(`✅ Backup file sent: ${fileName}`);
+                } else {
+                    throw new Error('Could not get chat');
+                }
+            } catch (sendError) {
+                console.error('❌ Error sending media:', sendError.message);
+                await this.safeSendMessage(message, `📦 *BACKUP FILE READY*\n\n📦 File: ${fileName}\n📅 Created: ${createdDate}\n📏 Size: ${fileSize}\n\n⚠️ Tidak bisa mengirim file otomatis. Silakan download manual dari server.`);
+            }
+
         } catch (error) {
             console.error('❌ Error sending backup file:', error);
-            await message.reply('❌ *ERROR*\n\nTerjadi kesalahan saat mengirim file backup\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
+            await this.safeSendMessage(message, '❌ *ERROR*\n\nTerjadi kesalahan saat mengirim file backup\n\n💡 *Tips:*\n• Coba lagi nanti\n• Pastikan file tidak rusak');
         }
     }
 
@@ -514,7 +565,20 @@ class WhatsAppFinanceRenderServer {
                 author: message.author,
                 body: message.body
             });
-            
+
+            // SKIP bot's own response messages to prevent infinite loop
+            // Bot responses typically start with these patterns
+            const botResponsePatterns = [
+                /^📊/, /^✅/, /^❌/, /^📋/, /^🏦/, /^💰/, /^📈/, /^📉/,
+                /^🔄/, /^⚠️/, /^\*RINGKASAN/, /^\*LAPORAN/, /^📁/, /^📦/,
+                /^🗑️/, /^💡/, /^📱/, /^🔐/, /^⛔/, /^FINANCE BOT/
+            ];
+
+            if (message.fromMe && botResponsePatterns.some(pattern => pattern.test(message.body))) {
+                console.log(`🔄 SKIP: Bot response message detected, ignoring to prevent loop`);
+                return;
+            }
+
             // BLOCK group management commands dari semua sumber kecuali dari diri sendiri
             const isGroupManagementCommand = message.body.toLowerCase().startsWith('add group ') || 
                 message.body.toLowerCase().startsWith('remove group ') ||
@@ -556,86 +620,63 @@ class WhatsAppFinanceRenderServer {
                     const groupId = message.body.substring(10).trim();
                     if (groupId && groupId.includes('@g.us')) {
                         const success = this.addAllowedGroup(groupId);
-                        const response = success ? 
+                        const response = success ?
                             `✅ Group ${groupId} berhasil ditambahkan ke daftar yang diizinkan` :
                             `⚠️ Group ${groupId} sudah ada di daftar yang diizinkan`;
-                        await message.reply(response);
+                        await this.safeSendMessage(message, response);
                         return;
                     } else {
-                        await message.reply('❌ Format salah. Gunakan: add group [GROUP_ID]\nContoh: add group 1234567890@g.us');
+                        await this.safeSendMessage(message, '❌ Format salah. Gunakan: add group [GROUP_ID]\nContoh: add group 1234567890@g.us');
                         return;
                     }
                 }
-                
-                    if (message.body.toLowerCase().startsWith('remove group ')) {
-                        const groupId = message.body.substring(13).trim();
-                        if (groupId && groupId.includes('@g.us')) {
-                            const success = this.removeAllowedGroup(groupId);
-                            const response = success ? 
-                                `✅ Group ${groupId} berhasil dihapus dari daftar yang diizinkan` :
-                                `⚠️ Group ${groupId} tidak ditemukan di daftar yang diizinkan`;
-                            await message.reply(response);
-                            return;
-                        } else {
-                            await message.reply('❌ Format salah. Gunakan: remove group [GROUP_ID]\nContoh: remove group 1234567890@g.us');
-                            return;
-                        }
-                    }
-                    
-                    if (message.body.toLowerCase() === 'list groups') {
-                        const allowedGroups = this.getAllowedGroups();
-                        if (allowedGroups.length === 0) {
-                            await message.reply('📋 Daftar group yang diizinkan kosong');
-                        } else {
-                            const groupList = allowedGroups.map((groupId, index) => `${index + 1}. ${groupId}`).join('\n');
-                            await message.reply(`📋 Daftar group yang diizinkan:\n${groupList}`);
-                        }
+
+                if (message.body.toLowerCase().startsWith('remove group ')) {
+                    const groupId = message.body.substring(13).trim();
+                    if (groupId && groupId.includes('@g.us')) {
+                        const success = this.removeAllowedGroup(groupId);
+                        const response = success ?
+                            `✅ Group ${groupId} berhasil dihapus dari daftar yang diizinkan` :
+                            `⚠️ Group ${groupId} tidak ditemukan di daftar yang diizinkan`;
+                        await this.safeSendMessage(message, response);
+                        return;
+                    } else {
+                        await this.safeSendMessage(message, '❌ Format salah. Gunakan: remove group [GROUP_ID]\nContoh: remove group 1234567890@g.us');
                         return;
                     }
-                    
+                }
+
+                    if (message.body.toLowerCase() === 'list groups') {
+                        const allowedGroups = this.getAllowedGroups();
+                        let response;
+                        if (allowedGroups.length === 0) {
+                            response = '📋 Daftar group yang diizinkan kosong';
+                        } else {
+                            const groupList = allowedGroups.map((groupId, index) => `${index + 1}. ${groupId}`).join('\n');
+                            response = `📋 Daftar group yang diizinkan:\n${groupList}`;
+                        }
+                        await this.safeSendMessage(message, response);
+                        return;
+                    }
+
                     if (message.body.toLowerCase() === 'clear groups') {
                         this.config.allowedGroups = [];
                         this.saveConfig();
-                        await message.reply('🗑️ Semua group telah dihapus dari daftar yang diizinkan');
+                        await this.safeSendMessage(message, '🗑️ Semua group telah dihapus dari daftar yang diizinkan');
                         return;
                     }
-                    
-                                         // Handle other self messages (non-group management)
-                     let contactName = message.author;
-                     try {
-                         if (message._data && message._data.notifyName) {
-                             contactName = message._data.notifyName;
-                         } else {
-                             const contact = await message.getContact();
-                             if (contact && contact.pushname) {
-                                 contactName = contact.pushname;
-                             } else if (contact && contact.name) {
-                                 contactName = contact.name;
-                             } else {
-                                 contactName = message.author.split('@')[0];
-                             }
-                         }
-                     } catch (error) {
-                         contactName = message.author.split('@')[0];
-                     }
 
-                     const result = await this.financeBot.processMessage(message.body, message.author, contactName);
-                
-                if (result) {
-                    // Check if this is a send backup file request
-                    if (result.includes('SEND BACKUP FILE') && result.includes('File sedang dikirim')) {
-                        // Extract file path from result
-                        const filePathMatch = result.match(/📁 \*Path:\* (.+)/);
-                        if (filePathMatch) {
-                            const filePath = filePathMatch[1];
-                            await this.sendBackupFile(message, filePath);
-                        }
+                    // Handle 'help' command from self
+                    if (message.body.toLowerCase() === 'help' || message.body.toLowerCase() === 'bantuan') {
+                        const helpText = this.financeBot.getHelpText();
+                        await this.safeSendMessage(message, helpText);
+                        return;
                     }
-                    
-                    // Send response back to the same chat
-                    await message.reply(result);
-                        console.log(`✅ Response terkirim ke chat: ${result}`);
-                }
+
+                // Untuk pesan lain dari diri sendiri, JANGAN proses (untuk menghindari loop)
+                // Hanya command di atas yang diizinkan dari self-message
+                console.log(`🔄 SKIP: Self-message bukan command yang diizinkan: ${message.body.substring(0, 50)}...`);
+                return;
             }
 
             // Handle group messages (from other people)
@@ -704,15 +745,15 @@ class WhatsAppFinanceRenderServer {
                     }
                     
                     // Send response back to group
-                    await message.reply(result);
+                    await this.safeSendMessage(message, result);
                     console.log(`✅ Response terkirim: ${result}`);
                 }
             }
         }
         ;
 
-        // Event handler panggil fungsi yang sama
-        this.client.on('message', this.handleWhatsAppMessage);
+        // Gunakan HANYA message_create untuk menangkap semua pesan (termasuk dari diri sendiri)
+        // JANGAN gunakan keduanya karena akan menyebabkan pesan diproses 2x
         this.client.on('message_create', this.handleWhatsAppMessage);
 
         // Error handler
